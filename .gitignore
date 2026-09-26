@@ -1,0 +1,9 @@
+node_modules/
+dist/
+dist-server/
+.studio-data/
+release/
+test-results/
+playwright-report/
+*.log
+.env
