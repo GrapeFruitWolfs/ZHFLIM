@@ -69,6 +69,7 @@ import type {
   VisibleText,
 } from "../shared/model";
 import { newId } from "../shared/model";
+import { TEMPLATES, getTemplate, type TemplateId } from "../shared/templates";
 import {
   CONTENT_LIBRARY,
   createComparison,
@@ -86,6 +87,7 @@ import {
   type SelectedFile,
 } from "./importFiles";
 import { useProject, type SaveState } from "./useProject";
+import { QuickPreview } from "./QuickPreview";
 
 type Navigation = "projects" | "settings" | "project";
 type WorkTab = "content" | "assets" | "visual";
@@ -176,16 +178,25 @@ function Modal({
     if (!dialog.current?.contains(document.activeElement))
       dialog.current?.focus();
     const key = (event: KeyboardEvent) => {
-      if (event.key === "Escape") closeRef.current();
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeRef.current();
+      }
       if (event.key === "Tab" && dialog.current) {
         const nodes = [
           ...dialog.current.querySelectorAll<HTMLElement>(
-            "button:not(:disabled),input:not(:disabled),select:not(:disabled),textarea:not(:disabled),a[href]",
+            "button:not(:disabled),input:not(:disabled),select:not(:disabled),textarea:not(:disabled),a[href],[tabindex]:not([tabindex='-1'])",
           ),
-        ];
+        ].filter((node) => node.tabIndex >= 0 && node.getClientRects().length > 0);
         const first = nodes[0];
         const last = nodes.at(-1);
-        if (event.shiftKey && document.activeElement === first) {
+        if (!first) {
+          event.preventDefault();
+          dialog.current.focus();
+        } else if (document.activeElement === dialog.current || !dialog.current.contains(document.activeElement)) {
+          event.preventDefault();
+          (event.shiftKey ? last : first)?.focus();
+        } else if (event.shiftKey && document.activeElement === first) {
           event.preventDefault();
           last?.focus();
         } else if (!event.shiftKey && document.activeElement === last) {
@@ -197,7 +208,7 @@ function Modal({
     document.addEventListener("keydown", key);
     return () => {
       document.removeEventListener("keydown", key);
-      previous?.focus();
+      if (previous?.isConnected) previous.focus();
     };
   }, []);
   return (
@@ -713,7 +724,7 @@ function ProjectList({
                 onClick={() => void onOpen(item.id)}
               >
                 <span className="cover-top">
-                  {item.projectNo}
+                  <span>{getTemplate(item.templateId).name.toUpperCase()} / {item.projectNo}</span>
                   <ArrowUpRight size={18} />
                 </span>
                 <span className="cover-name">
@@ -1045,7 +1056,7 @@ function Workbench({
   const [busy, setBusy] = useState("");
   const [previewTarget, setPreviewTarget] = useState<OutputTarget>("pdf");
   const [previewVisible, setPreviewVisible] = useState(true);
-  const [previewLoading, setPreviewLoading] = useState(true);
+  const [previewRevision, setPreviewRevision] = useState(initial.draftRevision);
   const [previewKey, setPreviewKey] = useState(0);
   const [rule, setRule] = useState<RecognitionRule>("after-first");
   const [rootId, setRootId] = useState("");
@@ -1102,39 +1113,57 @@ function Workbench({
     };
   }, [flush, busy, leaveGuard]);
   useEffect(() => {
-    if (saveState === "saved") {
-      setPreviewLoading(true);
-      setPreviewKey((value) => value + 1);
-    }
-  }, [project.draftRevision, saveState]);
+    if (!busy) return;
+    const beforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", beforeUnload);
+    return () => window.removeEventListener("beforeunload", beforeUnload);
+  }, [busy]);
+  useEffect(() => {
+    if (saveState === "saved" && !busy)
+      setPreviewRevision(project.draftRevision);
+  }, [project.draftRevision, saveState, busy]);
   useEffect(() => {
     if (candidate && candidate.draftRevision !== project.draftRevision)
       setCandidate(null);
   }, [project.draftRevision, candidate]);
   useEffect(() => {
     let disposed = false;
+    let loading = false;
+    let hasRunningExports = false;
+    const controller = new AbortController();
     const load = async () => {
+      if (loading) return;
+      loading = true;
       try {
         const records = await api<ExportRecord[]>(
           `/api/projects/${project.id}/exports`,
+          { signal: controller.signal },
         );
         if (!disposed) {
+          hasRunningExports = records.some(record => record.status === "running");
           setExports(records);
           setHistoryError("");
         }
       } catch (error) {
         if (!disposed) setHistoryError(errorMessage(error));
+      } finally {
+        loading = false;
       }
     };
     void load();
     const interval = setInterval(() => {
-      void load();
+      if (document.visibilityState === "visible" && (exportOpen || hasRunningExports))
+        void load();
     }, 3500);
     return () => {
       disposed = true;
       clearInterval(interval);
+      controller.abort();
     };
-  }, [project.id]);
+  }, [project.id, exportOpen]);
 
   const updateBlock = (block: DocumentBlock) =>
     edit((draft) => {
@@ -1234,10 +1263,11 @@ function Workbench({
     options: {
       manual?: boolean;
       target?: SlotTarget;
-      signal?: AbortSignal;
+      controller?: AbortController;
     } = {},
   ) => {
-    const controller = cancelImport.current || new AbortController();
+    if (cancelImport.current && cancelImport.current !== options.controller) return;
+    const controller = options.controller || new AbortController();
     cancelImport.current = controller;
     let importRootId = "";
     let importId = "";
@@ -1248,8 +1278,10 @@ function Workbench({
     try {
       setBusy("import");
       setCandidate(null);
+      setProgress({ label: "正在保存当前修改…", done: 0, total: 0 });
       await flush();
       savedForImport = true;
+      if (controller.signal.aborted) return;
       if (!selection.files.length) {
         if (selection.errors.length)
           throw new Error(selection.errors.join("；"));
@@ -1279,7 +1311,6 @@ function Workbench({
             ? true
             : includeUnclassified,
         },
-        controller.signal,
       );
       const permittedPaths = new Set(imported.imagePaths);
       const images = allImages.filter((item) =>
@@ -1385,16 +1416,17 @@ function Workbench({
     }
   };
   const handleDrop = async (transfer: DataTransfer, target?: SlotTarget) => {
-    if (locked) return;
+    if (locked || cancelImport.current) return;
     const controller = new AbortController();
     cancelImport.current = controller;
     setBusy("scan");
     setProgress({ label: "正在读取目录结构…", done: 0, total: 0 });
     try {
       const selection = await fromDrop(transfer, controller.signal);
-      await processFiles(selection, { manual: Boolean(target), target });
+      await processFiles(selection, { manual: Boolean(target), target, controller });
     } catch (error) {
       if (!controller.signal.aborted) notify(errorMessage(error), true);
+      else notify("已取消目录扫描，未开始导入");
       setBusy("");
       setProgress(null);
       cancelImport.current = null;
@@ -1569,6 +1601,18 @@ function Workbench({
     link.click();
     URL.revokeObjectURL(url);
   };
+  const reloadSaved = async () => {
+    if (locked || !window.confirm("重新载入服务器版本会放弃当前未保存编辑。建议先保存草稿副本。继续？")) return;
+    setBusy("reload");
+    try {
+      await refreshRecord();
+      setCandidate(null);
+    } catch (error) {
+      notify(errorMessage(error), true);
+    } finally {
+      setBusy("");
+    }
+  };
   const saveLabels: Record<SaveState, string> = {
     saved: "所有修改已保存",
     pending: "等待保存",
@@ -1630,6 +1674,7 @@ function Workbench({
           <AlertCircle size={17} />
           <span>当前输入尚未保存。{saveError} 请保留此页面。</span>
           <button
+            disabled={locked}
             onClick={() =>
               void flush().catch((error) => notify(errorMessage(error), true))
             }
@@ -1638,16 +1683,8 @@ function Workbench({
           </button>
           <button onClick={downloadDraft}>保存草稿副本</button>
           <button
-            onClick={() => {
-              if (
-                window.confirm(
-                  "重新载入服务器版本会放弃当前未保存编辑。建议先保存草稿副本。继续？",
-                )
-              )
-                void refreshRecord().catch((error) =>
-                  notify(errorMessage(error), true),
-                );
-            }}
+            disabled={locked}
+            onClick={() => void reloadSaved()}
           >
             载入已保存版本
           </button>
@@ -1966,19 +2003,15 @@ function Workbench({
               <div className="segmented">
                 <button
                   className={previewTarget === "pdf" ? "active" : ""}
-                  onClick={() => {
-                    setPreviewTarget("pdf");
-                    setPreviewLoading(true);
-                  }}
+                  aria-pressed={previewTarget === "pdf"}
+                  onClick={() => setPreviewTarget("pdf")}
                 >
                   PDF
                 </button>
                 <button
                   className={previewTarget === "image" ? "active" : ""}
-                  onClick={() => {
-                    setPreviewTarget("image");
-                    setPreviewLoading(true);
-                  }}
+                  aria-pressed={previewTarget === "image"}
+                  onClick={() => setPreviewTarget("image")}
                 >
                   长图
                 </button>
@@ -1990,28 +2023,20 @@ function Workbench({
                   <span>9:41</span>
                   <span>● ▰</span>
                 </div>
-                {previewLoading && (
-                  <div className="preview-loading">
-                    <LoaderCircle size={20} className="spin" />
-                    <span>整理预览中</span>
-                  </div>
-                )}
                 <QuickPreview
-                  key={`${previewTarget}-${previewKey}`}
-                  src={`/api/projects/${project.id}/preview?target=${previewTarget}&revision=${project.draftRevision}`}
-                  onReady={() => setPreviewLoading(false)}
+                  src={`/api/projects/${project.id}/preview?target=${previewTarget}&revision=${previewRevision}`}
+                  refreshKey={previewKey}
                 />
                 <div className="phone-home" />
               </div>
             </div>
             <p className="preview-caption">
-              {saveState === "saved"
+              {saveState === "saved" && previewRevision === project.draftRevision
                 ? "快速预览 · 正式分页请查看导出检查"
                 : "当前显示上次保存内容 · 正在等待保存"}
               <button
                 onClick={() => {
                   setPreviewKey((value) => value + 1);
-                  setPreviewLoading(true);
                 }}
                 aria-label="刷新预览"
               >
@@ -2020,9 +2045,7 @@ function Workbench({
             </p>
             <div className="preview-footer">
               <span>
-                {project.document.templateId === "editorial"
-                  ? "明亮 · Editorial"
-                  : "深色 · Cinematic"}
+                {getTemplate(project.document.templateId).label} · {getTemplate(project.document.templateId).name}
               </span>
               <span>
                 {project.document.comparisonLayout === "stacked"
@@ -2598,6 +2621,28 @@ function BlockEditor({
   );
 }
 
+const templateSamples: Record<TemplateId, { kicker: string; title: string; caption: string }> = {
+  editorial: { kicker: "WEDDING STORY", title: "The art of\nremembering.", caption: "A STORY, BEAUTIFULLY DELIVERED." },
+  cinematic: { kicker: "PRIVATE VIEWING", title: "A STORY\nIN MOTION", caption: "THE FILM · THE MOMENTS · THE MEMORY" },
+  archive: { kicker: "PRODUCTION ARCHIVE / 001", title: "A day,\ndocumented.", caption: "01 / COLLECTION     02 / COLOUR     03 / NOTES" },
+  correspondence: { kicker: "A LETTER FOR TWO", title: "Dear,\nyou & you.", caption: "With love, always." },
+  gallery: { kicker: "PRIVATE EXHIBITION", title: "STUDIES\nIN LOVE", caption: "01 / A PERSONAL COLLECTION" },
+};
+
+function TemplateSample({ id }: { id: TemplateId }) {
+  const sample = templateSamples[id];
+  return (
+    <span className={`template-sample ${id}`} aria-hidden="true">
+      <small className="sample-kicker">{sample.kicker}</small>
+      <span className="sample-title">{sample.title}</span>
+      <span className="sample-frame"><i /><i /><small>BEFORE / AFTER</small></span>
+      <span className="sample-index"><i>01</i><i>02</i><i>03</i></span>
+      <i className="sample-rule" />
+      <small className="sample-caption">{sample.caption}</small>
+    </span>
+  );
+}
+
 function VisualEditor({
   project,
   edit,
@@ -2621,44 +2666,36 @@ function VisualEditor({
         <span>01</span>视觉模板
       </h3>
       <div className="template-options">
-        {(["editorial", "cinematic"] as const).map((template) => (
+        {TEMPLATES.map((template) => (
           <button
-            className={`template-card ${doc.templateId === template ? "selected" : ""}`}
-            key={template}
+            className={`template-card ${doc.templateId === template.id ? "selected" : ""}`}
+            key={template.id}
+            data-template={template.id}
+            aria-pressed={doc.templateId === template.id}
             onClick={() =>
               edit((draft) => {
-                draft.document.templateId = template;
+                draft.document.templateId = template.id;
                 draft.document.templateVersion = 1;
               })
             }
           >
-            <span className={`template-sample ${template}`}>
-              <small>WEDDING STORY</small>
-              <span>
-                The art of
-                <br />
-                remembering.
-              </span>
-              <i />
-              <small>A STORY, BEAUTIFULLY DELIVERED.</small>
-            </span>
+            <TemplateSample id={template.id} />
             <span className="template-card-label">
               <span>
                 <strong>
-                  {template === "editorial" ? "Editorial" : "Cinematic"}
+                  {template.name}
                 </strong>
                 <small>
-                  {template === "editorial"
-                    ? "明亮 · 留白 · 编辑式"
-                    : "深色 · 电影感 · 克制"}
+                  {template.label}
                 </small>
               </span>
-              {doc.templateId === template ? (
+              {doc.templateId === template.id ? (
                 <CheckCircle2 size={19} />
               ) : (
                 <Circle size={19} />
               )}
             </span>
+            <span className="template-description">{template.description}</span>
           </button>
         ))}
       </div>
@@ -3344,38 +3381,6 @@ function AssetsEditor({
         </details>
       )}
     </div>
-  );
-}
-
-function QuickPreview({ src, onReady }: { src: string; onReady: () => void }) {
-  const frame = useRef<HTMLIFrameElement>(null);
-  const resize = useCallback(() => {
-    const node = frame.current;
-    const document = node?.contentDocument;
-    const root = document?.querySelector<HTMLElement>(".render-root");
-    if (node && document && root?.offsetWidth) {
-      document.documentElement.style.zoom = String(
-        node.clientWidth / root.offsetWidth,
-      );
-      document.documentElement.style.overflowX = "hidden";
-    }
-  }, []);
-  useEffect(() => {
-    if (!frame.current) return;
-    const observer = new ResizeObserver(resize);
-    observer.observe(frame.current);
-    return () => observer.disconnect();
-  }, [resize]);
-  return (
-    <iframe
-      ref={frame}
-      title="交付文档手机预览"
-      src={src}
-      onLoad={() => {
-        resize();
-        onReady();
-      }}
-    />
   );
 }
 

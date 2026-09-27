@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { createReadStream, createWriteStream, existsSync } from 'node:fs';
-import { cp, mkdir, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, open, readFile, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -73,9 +73,15 @@ const sharpNative = sharpFiles.filter(file => /^sharp-win32-x64(?:-[\d.]+)?\.nod
 if (sharpNative.length !== 1 || !sharpFiles.includes('libvips-42.dll') || !sharpFiles.some(file => /^libvips-cpp-.*\.dll$/.test(file))) throw new Error('Windows Sharp native addon or required DLLs are missing.');
 const sharpBinaries = sharpFiles.filter(file => file.endsWith('.node') || file.endsWith('.dll')).map(file => join(sharpDirectory, file));
 for (const file of [join(output, 'runtime', 'node.exe'), join(output, 'chromium', 'chrome-win64', 'chrome.exe'), ...sharpBinaries]) {
-  const data = await readFile(file);
-  if (data.subarray(0, 2).toString() !== 'MZ') throw new Error(`Missing Windows executable: ${file}`);
+  const handle = await open(file, 'r');
+  try {
+    const data = Buffer.alloc(2);
+    await handle.read(data, 0, 2, 0);
+    if (data.toString() !== 'MZ') throw new Error(`Missing Windows executable: ${file}`);
+  } finally { await handle.close(); }
 }
+const windowsExecutionVerified = process.platform === 'win32';
+if (windowsExecutionVerified) await run(process.execPath, [join(root, 'scripts', 'smoke-runtime.mjs'), output]);
 await writeFile(join(output, 'README.txt'), [
   'Wedding Delivery Studio — Windows x64 本地预览版', '',
   '1. 将整个 ZIP 解压到普通文件夹，不要直接在压缩包内启动。',
@@ -85,7 +91,7 @@ await writeFile(join(output, 'README.txt'), [
   '5. 备份时先关闭 Studio，再复制完整数据目录（不只是数据库文件）。',
   '6. 选择文件夹只扫描目录，默认仅复制候选对比图；不会上传完整婚礼影片。',
   '7. 先使用脱敏副本试做一次交付，确认中文字体、配对、分页及长图后再用于真实项目。', '',
-  '这是未签名的便携预览版，已在其他系统完成构建与测试，尚未在 Windows 真机执行。',
+  windowsExecutionVerified ? '这是未签名的便携预览版，已在 Windows 自动化环境完成启动、导入、双格式输出与重开验收；实际手机和个人电脑仍需试用。' : '这是未签名的便携预览版，已在其他系统完成构建与测试，尚未在 Windows 执行。',
   '本机服务只监听回环地址，不是可直接部署到公网的 SaaS；客户不需要运行此软件。',
   'PDF 与长图生成后，由你通过微信或网盘发送给客户。客户网页和账号登录尚未实现。',
   'Node、Chromium、依赖和字体遵循各自随包许可证。',
@@ -93,10 +99,10 @@ await writeFile(join(output, 'README.txt'), [
 ].join('\r\n'));
 const buildFiles = ['package-lock.json', 'dist/index.html', 'dist-server/index.js', 'launcher.mjs', 'Start-Studio.cmd'];
 const buildHashes = Object.fromEntries(await Promise.all(buildFiles.map(async file => [file, await hash(join(output, file))])));
-await writeFile(join(output, 'build-manifest.json'), JSON.stringify({ appVersion: pkg.version, builtAt: new Date().toISOString(), target: 'win32-x64', buildHost: process.platform, windowsExecutionVerified: false, nodeVersion, chromiumVersion, downloads: [nodeDownload, chromeDownload], dependencies, buildHashes }, null, 2));
+await writeFile(join(output, 'build-manifest.json'), JSON.stringify({ appVersion: pkg.version, builtAt: new Date().toISOString(), target: 'win32-x64', buildHost: process.platform, windowsExecutionVerified, nodeVersion, chromiumVersion, downloads: [nodeDownload, chromeDownload], dependencies, buildHashes }, null, 2));
 const zipPath = `${output}.zip`;
 if (process.platform === 'win32') await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', 'Compress-Archive -LiteralPath $env:WDS_RELEASE -DestinationPath $env:WDS_RELEASE_ZIP'], root, { ...process.env, WDS_RELEASE: output, WDS_RELEASE_ZIP: zipPath });
 else await run('zip', ['-q', '-r', zipPath, releaseName], join(root, 'release'));
 const releaseHash = await hash(zipPath);
 await writeFile(`${zipPath}.sha256`, `${releaseHash}  ${releaseName}.zip\n`);
-console.log(`Windows portable archive: ${zipPath}\nSHA-256: ${releaseHash}\nRuntime execution on Windows is still unverified.`);
+console.log(`Windows portable archive: ${zipPath}\nSHA-256: ${releaseHash}\nWindows runtime smoke verified: ${windowsExecutionVerified}.`);

@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import sharp from 'sharp';
 import Fastify from 'fastify';
-import { createProject, createTextBlock } from '../src/shared/defaults.js';
+import { createDeliveryItem, createProject, createTextBlock } from '../src/shared/defaults.js';
 import type { AssetVersion, ComparisonBlock, ProjectRecord, StudioSettings } from '../src/shared/model.js';
 import type { StudioStore } from '../src/server/contracts.js';
 import { candidateIsStale, digest, loadFonts, prepareDisplay, resolvedDeliveryDate, safeDeliveryUrl, settingsFingerprint } from '../src/rendering/display.js';
@@ -17,6 +17,7 @@ import { checkGlyphCoverage } from '../src/rendering/fonts.js';
 import { RenderFailure, renderTarget, startRenderer } from '../src/rendering/engine.js';
 import { registerExportRoutes } from '../src/server/export-service.js';
 import { StudioError } from '../src/domain/errors.js';
+import { TEMPLATE_IDS } from '../src/shared/templates.js';
 
 const settings: StudioSettings = { tenantId: 'studio-test', studioName: '行间影像', photographerName: 'ZH', tagline: '为真实的情绪留一份底片。', accent: '#9a805f', timezone: 'Asia/Shanghai' };
 function sample(): ProjectRecord {
@@ -49,11 +50,13 @@ test('render whitelist excludes hidden fields, hidden blocks, unused assets and 
   project.document.blocks.push({ id: 'hidden-comparison', type: 'comparisons', title: 'Hidden pictures', order: 5, visible: false, layout: 'stacked', comparisons: [{ id: 'private-pair', visible: true, order: 0, title: '', locked: true, before: { assetId: 'private', versionId: 'private' }, after: null }] });
   const store = new MemoryStore('/tmp/unused', project);
   const prepared = await prepareDisplay(project, store, '2026-09-26');
-  const html = renderHtml(prepared.display, 'pdf', { css: '', hashes: {}, issues: [] });
-  for (const hidden of ['NEVER_RENDER_PRIVATE_NOTE', 'PRIVATE_PROJECT_TITLE', 'HIDDEN_SALUTATION', 'HIDDEN_STUDIO', 'HIDDEN_PROJECT_NUMBER', 'HIDDEN_TITLE', 'HIDDEN_CONTENT', 'private-pair']) assert.ok(!html.includes(hidden), hidden);
+  for (const templateId of TEMPLATE_IDS) {
+    const html = renderHtml({ ...prepared.display, templateId }, 'pdf', { css: '', hashes: {}, issues: [] });
+    for (const hidden of ['NEVER_RENDER_PRIVATE_NOTE', 'PRIVATE_PROJECT_TITLE', 'HIDDEN_SALUTATION', 'HIDDEN_STUDIO', 'HIDDEN_PROJECT_NUMBER', 'HIDDEN_TITLE', 'HIDDEN_CONTENT', 'private-pair']) assert.ok(!html.includes(hidden), `${templateId}: ${hidden}`);
+    assert.ok(html.includes('林与陈'));
+  }
   assert.equal(prepared.issues.filter(issue => issue.severity === 'error').length, 0);
   assert.equal(prepared.assets.length, 0);
-  assert.ok(html.includes('林与陈'));
 });
 
 test('visible incomplete content reports actionable errors, hiding its chapter removes those errors', async () => {
@@ -101,6 +104,23 @@ test('paragraph chunking preserves long text including supplementary-plane names
   assert.ok(chunks.every(chunk => Array.from(chunk).length <= 220));
 });
 
+test('paragraph chunks bound hard line breaks while preserving customer whitespace', () => {
+  const text = '𠮷田\r\n'.repeat(70) + '\n\n最后一条说明。';
+  const chunks = textChunks(text);
+  assert.equal(chunks.join(''), text);
+  assert.ok(chunks.every(chunk => chunk.split(/\r\n|\r|\n/).length <= 6));
+});
+
+test('missing bundled fonts block formal output while quick previews retain an explicit fallback warning', async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'wds-missing-fonts-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const formal = await loadFonts(directory);
+  assert.equal(formal.issues.length, 2);
+  assert.ok(formal.issues.every(issue => issue.severity === 'error' && issue.code === 'FONT_UNAVAILABLE'));
+  const quick = await loadFonts(directory, false);
+  assert.ok(quick.issues.every(issue => issue.severity === 'warning' && issue.code === 'FONT_FALLBACK'));
+});
+
 test('packaged font coverage checks actual visible characters and locates missing glyphs', async () => {
   const project = sample();
   project.document.fields.salutation = { value: String.fromCodePoint(0x10ffff), visible: false };
@@ -126,13 +146,13 @@ test('resource budget rejects excessive visible comparisons before asset access,
   assert.ok(!allowed.issues.some(issue => issue.code === 'RESOURCE_BUDGET')); assert.equal(touched, 0);
 });
 
-async function addPortraits(store: MemoryStore, directory: string): Promise<void> {
+async function addPortraits(store: MemoryStore, directory: string, dimensions: [number, number][] = [[900, 1350], [900, 1350]]): Promise<void> {
   const refs = [];
-  for (let index = 0; index < 2; index++) {
-    const bytes = await sharp({ create: { width: 900, height: 1350, channels: 3, background: index ? '#b5bd98' : '#828e88' } }).png().toBuffer();
+  for (const [index, [width, height]] of dimensions.entries()) {
+    const bytes = await sharp({ create: { width, height, channels: 3, background: index ? '#b5bd98' : '#828e88' } }).png().toBuffer();
     const location = path.join(directory, `portrait-${index}.png`); await writeFile(location, bytes);
     const id = `asset-${index}`; const versionId = `version-${index}`;
-    const version: AssetVersion = { id: versionId, hash: digest(bytes), derivativeHash: digest(bytes), filename: `original-${index}.png`, width: 900, height: 1350, mime: 'image/png', byteSize: bytes.length, storageKey: location, originalStorageKey: location, createdAt: new Date().toISOString() };
+    const version: AssetVersion = { id: versionId, hash: digest(bytes), derivativeHash: digest(bytes), filename: `original-${index}.png`, width, height, mime: 'image/png', byteSize: bytes.length, storageKey: location, originalStorageKey: location, createdAt: new Date().toISOString() };
     store.current.assets.push({ id, tenantId: settings.tenantId, projectId: store.current.id, rootId: 'root', relativePath: `PRIVATE_SOURCE_PATH_${index}.png`, versions: [version], latestVersionId: versionId });
     store.paths.set(versionId, { path: location, version }); refs.push({ assetId: id, versionId });
   }
@@ -148,6 +168,63 @@ test('selected asset version is hash verified and never silently replaced by lat
   await writeFile(store.paths.get('version-0')!.path, 'corrupted');
   const broken = await prepareDisplay(store.current, store, '2026-09-26');
   assert.ok(broken.issues.some(issue => issue.code === 'ASSET_UNAVAILABLE' && issue.assetId === 'asset-0'));
+});
+
+test('Chromium paginates pasted hard lines and keeps each QR access method together in short segments', { timeout: 120_000 }, async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'wds-render-lines-')); t.after(() => rm(directory, { recursive: true, force: true }));
+  const store = new MemoryStore(directory, sample());
+  const content = Array.from({ length: 70 }, (_, index) => `第 ${index + 1} 条说明`).join('\r\n') + '\n最后一条完整保留。';
+  store.current.document.blocks = [createTextBlock('逐项保存建议', content)];
+  const fonts = await loadFonts(process.cwd());
+  const { browser } = await startRenderer(); t.after(() => browser.close());
+  const prepared = await prepareDisplay(store.current, store, '2026-09-26');
+  const pdf = await renderTarget(browser, renderHtml(prepared.display, 'pdf', fonts), 'pdf', store.current.document.output, path.join(directory, 'pdf'));
+  assert.ok(pdf[0].pages! >= 4);
+  if (existsSync('/usr/bin/pdftotext')) {
+    const extracted = await promisify(execFile)('/usr/bin/pdftotext', [pdf[0].path, '-']);
+    for (let index = 0; index < 70; index++) assert.ok(extracted.stdout.includes(`第 ${index + 1} 条说明`));
+    assert.ok(extracted.stdout.includes('最后一条完整保留。'));
+  }
+  const item = { ...createDeliveryItem('婚礼短片'), method: 'link' as const, playbackUrl: 'https://example.com/watch/wedding', downloadUrl: 'https://pan.baidu.com/s/test-wedding' };
+  store.current.document.blocks = [{ id: 'two-links', type: 'deliveries', title: '观看与保存', order: 0, visible: true, items: [item] }];
+  const linked = await prepareDisplay(store.current, store, '2026-09-26');
+  const images = await renderTarget(browser, renderHtml(linked.display, 'image', fonts), 'image', { ...store.current.document.output, imageWidth: 1440, segmentHeight: 2000, allowImageSegments: true }, path.join(directory, 'links'));
+  assert.ok(images.length >= 2);
+  assert.ok(images.every(image => image.width === 1440 && image.height! <= 2002));
+});
+
+test('all five visual templates preserve selected layout and produce PDF plus long images with mixed-ratio photos', { timeout: 180_000 }, async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'wds-render-templates-')); t.after(() => rm(directory, { recursive: true, force: true }));
+  const store = new MemoryStore(directory, sample());
+  await addPortraits(store, directory, [[900, 1350], [1280, 720]]);
+  const pair = store.current.document.blocks.find(block => block.type === 'comparisons')!;
+  if (pair.type === 'comparisons') pair.layout = 'split';
+  store.current.document.blocks.push({ ...createTextBlock('制作手记', '珍藏这一日的光线与声音。\n前后画面保持完整比例。'), order: 2 });
+  const fonts = await loadFonts(process.cwd());
+  const { browser } = await startRenderer(); t.after(() => browser.close());
+  const structuralMarkers = { archive: 'class="archive-ledger"', correspondence: 'class="letter-opening"', gallery: 'class="gallery-poster"' };
+  for (const templateId of TEMPLATE_IDS) {
+    store.current.document.templateId = templateId;
+    const prepared = await prepareDisplay(store.current, store, '2026-09-26');
+    assert.ok(!prepared.issues.some(issue => issue.severity === 'error'), `${templateId}: ${JSON.stringify(prepared.issues)}`);
+    assert.ok(prepared.issues.some(issue => issue.code === 'ASPECT_RATIO_MISMATCH'));
+    assert.deepEqual(await checkGlyphCoverage(prepared.display, process.cwd()), []);
+    const html = renderHtml(prepared.display, 'pdf', fonts);
+    assert.ok(html.includes('comparison-pair split'), `${templateId} must respect the project layout`);
+    if (templateId in structuralMarkers) assert.ok(html.includes(structuralMarkers[templateId as keyof typeof structuralMarkers]));
+    const pdf = await renderTarget(browser, html, 'pdf', store.current.document.output, path.join(directory, templateId, 'pdf'));
+    assert.ok(pdf[0].pages! >= 2, templateId);
+    const images = await renderTarget(browser, renderHtml(prepared.display, 'image', fonts), 'image', store.current.document.output, path.join(directory, templateId, 'image'));
+    assert.ok(images.length >= 1);
+    assert.ok(images.every(image => image.width === 1080 && image.height! <= store.current.document.output.segmentHeight + 2), templateId);
+    if (existsSync('/usr/bin/pdftotext')) {
+      const extracted = await promisify(execFile)('/usr/bin/pdftotext', [pdf[0].path, '-']);
+      assert.ok(extracted.stdout.includes('林与陈'), templateId);
+      assert.ok(extracted.stdout.includes('珍藏这一日的光线与声音。'), templateId);
+      assert.ok(extracted.stdout.includes('前后画面保持完整比例。'), templateId);
+      assert.ok(!extracted.stdout.includes('NEVER_RENDER_PRIVATE_NOTE'));
+    }
+  }
 });
 
 test('Chromium produces real PDF and bounded long-image segments without truncating final text', { timeout: 120_000 }, async t => {

@@ -224,3 +224,91 @@ test('a queued upload remains bound to its original scan and cannot contaminate 
   assert.equal(accepted.asset.versions.length, 1);
   assert.equal(finalizeImport(store, project.id, replacement.rootId, false, replacement.report.id).report.imported, 1);
 });
+
+test('changing numeric recognition direction updates only unlocked relationships and preserves pinned versions', async t => {
+  const { store, project } = await fixture(t);
+  const files = observations('01-1.jpg', '01-2.jpg', '02-1.jpg', '02-2.jpg');
+  const run = beginImport(store, project.id, { label: '方向修正', rule: 'after-first', files });
+  for (const file of files) await importImage(store, project.id, run.rootId, file.relativePath, await makeImage('#345678'));
+  const initial = finalizeImport(store, project.id, run.rootId).project;
+  const automatic = structuredClone(comparisons(initial)[0]);
+  comparisons(initial)[1].locked = true;
+  const manual = structuredClone(comparisons(initial)[1]);
+  store.saveProject(initial, initial.draftRevision);
+  beginImport(store, project.id, { rootId: run.rootId, label: '方向修正', rule: 'after-first', files });
+  await importImage(store, project.id, run.rootId, files[0].relativePath, await makeImage('#cc8866'));
+  finalizeImport(store, project.id, run.rootId);
+  // A missing original remains available through its managed copy; rule changes must not duplicate one side.
+  const changed = beginImport(store, project.id, { rootId: run.rootId, label: '方向修正', rule: 'before-first', files: files.slice(0, 1).concat(files.slice(2)) });
+  assert.deepEqual(comparisons(changed.project)[0], { ...automatic, before: automatic.after, after: automatic.before });
+  assert.deepEqual(comparisons(changed.project)[1], manual);
+  const repeated = beginImport(store, project.id, { rootId: run.rootId, label: '方向修正', rule: 'before-first', files });
+  assert.deepEqual(comparisons(repeated.project), comparisons(changed.project));
+});
+
+test('rescan reports missing sources without dropping managed comparisons, and incomplete manual imports remain explicit', async t => {
+  const { store, project } = await fixture(t);
+  const files = observations('01-1.jpg', '01-2.jpg');
+  const run = beginImport(store, project.id, { label: '来源检查', rule: 'after-first', files });
+  for (const file of files) await importImage(store, project.id, run.rootId, file.relativePath, await makeImage('#765432'));
+  const initial = finalizeImport(store, project.id, run.rootId).project;
+  const rescan = beginImport(store, project.id, { rootId: run.rootId, label: '来源检查', rule: 'after-first', files: [] });
+  assert.deepEqual(comparisons(rescan.project), comparisons(initial));
+  assert.ok(rescan.report.issues.some(issue => issue.code === 'SOURCE_MISSING' && issue.paths.includes('01-1.jpg') && issue.paths.includes('01-2.jpg')));
+  const manual = beginImport(store, project.id, { label: '手动补图', rule: 'manual', files: observations('portrait.jpg'), includeUnclassifiedImages: true });
+  const cancelled = finalizeImport(store, project.id, manual.rootId, true, manual.report.id);
+  assert.ok(cancelled.report.issues.some(issue => issue.code === 'IMPORT_INCOMPLETE' && issue.paths.includes('portrait.jpg')));
+  assert.equal(cancelled.report.cancelled, true);
+  assert.equal(cancelled.report.imported, 0);
+});
+
+test('finalizing an import twice preserves the first result and does not invalidate the draft again', async t => {
+  const { store, project } = await fixture(t);
+  const run = beginImport(store, project.id, { label: '取消重试', rule: 'manual', files: observations('portrait.jpg'), includeUnclassifiedImages: true });
+  const first = finalizeImport(store, project.id, run.rootId, true, run.report.id);
+  const second = finalizeImport(store, project.id, run.rootId, false, run.report.id);
+  assert.deepEqual(second, first);
+  assert.deepEqual(store.getProject(project.id), first.project);
+});
+
+test('scan and completion roll back the project when persisting the import run fails', async t => {
+  const { directory, store, project } = await fixture(t);
+  const fault = new DatabaseSync(join(directory, 'workspace.sqlite'));
+  try {
+    fault.exec("CREATE TRIGGER fail_import_insert BEFORE INSERT ON records WHEN NEW.kind='import-run' BEGIN SELECT RAISE(ABORT, 'simulated import storage failure'); END;");
+    assert.throws(() => beginImport(store, project.id, { label: '原子扫描', rule: 'manual', files: [] }), /simulated import storage failure/);
+    assert.deepEqual(store.getProject(project.id), project);
+    fault.exec('DROP TRIGGER fail_import_insert');
+    const run = beginImport(store, project.id, { label: '原子完成', rule: 'manual', files: [] });
+    fault.exec("CREATE TRIGGER fail_import_update BEFORE UPDATE ON records WHEN NEW.kind='import-run' BEGIN SELECT RAISE(ABORT, 'simulated import storage failure'); END;");
+    assert.throws(() => finalizeImport(store, project.id, run.rootId, true, run.report.id), /simulated import storage failure/);
+    assert.deepEqual(store.getProject(project.id), run.project);
+    fault.exec('DROP TRIGGER fail_import_update');
+    const completed = finalizeImport(store, project.id, run.rootId, false, run.report.id);
+    assert.equal(completed.project.draftRevision, run.project.draftRevision + 1);
+  } finally { fault.close(); }
+});
+
+test('an interrupted upload commit cannot register an asset or double-count a successful retry', async t => {
+  const { directory, store, project } = await fixture(t);
+  const run = beginImport(store, project.id, { label: '原子图片导入', rule: 'after-first', files: observations('01-1.jpg') });
+  const bytes = await makeImage('#bbaa99');
+  const fault = new DatabaseSync(join(directory, 'workspace.sqlite'));
+  try {
+    fault.exec("CREATE TRIGGER fail_upload_run BEFORE UPDATE ON records WHEN NEW.kind='import-run' BEGIN SELECT RAISE(ABORT, 'simulated interrupted upload'); END;");
+    await assert.rejects(() => importImage(store, project.id, run.rootId, '01-1.jpg', bytes, run.report.id), { code: 'STORAGE_WRITE_FAILED' });
+    const failed = store.getProject(project.id);
+    assert.equal(failed.assets.length, 0);
+    assert.equal(comparisons(failed).length, 0);
+    assert.equal(failed.importReports.at(-1)!.imported, 0);
+    assert.match(failed.importReports.at(-1)!.issues.find(issue => issue.code === 'IMAGE_IMPORT_FAILED')!.message, /保存失败/);
+    fault.exec('DROP TRIGGER fail_upload_run');
+    await importImage(store, project.id, run.rootId, '01-1.jpg', bytes, run.report.id);
+    const retried = finalizeImport(store, project.id, run.rootId, false, run.report.id);
+    assert.equal(retried.project.assets.length, 1);
+    assert.equal(retried.project.assets[0].versions.length, 1);
+    assert.equal(retried.report.imported, 1);
+    assert.equal(retried.report.reused, 0);
+    assert.equal(retried.report.issues.some(issue => issue.code === 'IMAGE_IMPORT_FAILED' || issue.code === 'IMPORT_INCOMPLETE'), false);
+  } finally { fault.close(); }
+});

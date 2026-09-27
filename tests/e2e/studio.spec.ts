@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import sharp from 'sharp';
 import type { ProjectRecord, PreviewCandidate, ExportRecord } from '../../src/shared/model';
+import { TEMPLATE_IDS } from '../../src/shared/templates';
 
 async function createInBrowser(page: Page, title: string) {
   await page.goto('/');
@@ -78,7 +79,7 @@ test('browser workflow: directory recognition, manual control, persistence and r
     await saved(page);
 
     await page.getByRole('button', { name: '视觉与输出', exact: true }).click();
-    await page.getByRole('button', { name: /Cinematic 深色/ }).click();
+    await page.locator('.template-card[data-template="cinematic"]').click();
     await page.getByRole('button', { name: /Stacked · 上下/ }).click();
     await saved(page);
     await page.screenshot({ path: testInfo.outputPath('workbench-cinematic.png'), fullPage: true });
@@ -142,4 +143,47 @@ test('failed saves retain input and block stale candidate generation', async ({ 
   await page.getByRole('button', { name: '重试保存', exact: true }).click();
   await saved(page);
   expect((await projectFromApi(page, id)).document.fields.coupleNames.value).toBe('未保存的新人姓名');
+});
+
+test('five distinct templates persist and phone preview recovers without duplicate refreshes', async ({ page }, testInfo) => {
+  const id = await createInBrowser(page, '五模板与预览恢复');
+  await page.getByLabel('新人姓名', { exact: true }).fill('林岚 & 周屿');
+  await page.getByLabel('婚礼日期', { exact: true }).fill('2026-09-12');
+  await saved(page);
+  const phone = page.locator('.phone-frame');
+  const frame = page.frameLocator('iframe[title="交付文档手机预览"]');
+  await expect(frame.locator('.render-root')).toBeVisible();
+  await expect(phone.locator('.preview-loading')).toHaveCount(0);
+  let previews = 0;
+  page.on('request', request => { if (request.url().includes(`/api/projects/${id}/preview?`)) previews++; });
+  await page.locator('.preview-heading').getByRole('button', { name: 'PDF', exact: true }).click();
+  await page.waitForTimeout(400);
+  await expect(phone.locator('.preview-loading')).toHaveCount(0);
+  expect(previews).toBe(0);
+
+  await page.route(`**/api/projects/${id}/preview?**`, route => route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ code: 'PREVIEW_TEST_FAILURE', message: '测试预览暂不可用' }) }));
+  await page.getByRole('button', { name: '刷新预览', exact: true }).click();
+  await expect(phone.getByText('预览暂不可用', { exact: true })).toBeVisible();
+  await page.unroute(`**/api/projects/${id}/preview?**`);
+  await phone.getByRole('button', { name: '重试预览' }).click();
+  await expect(phone.locator('.preview-loading')).toHaveCount(0);
+  await expect(frame.locator('.render-root')).toBeVisible();
+
+  await page.getByRole('button', { name: '视觉与输出', exact: true }).click();
+  await expect(page.locator('.template-card')).toHaveCount(5);
+  for (const template of TEMPLATE_IDS) {
+    await page.locator(`.template-card[data-template="${template}"]`).click();
+    await saved(page);
+    await expect(frame.locator('body')).toHaveAttribute('data-template', template);
+    await expect(phone.locator('.preview-loading')).toHaveCount(0);
+    if (['archive', 'correspondence', 'gallery'].includes(template)) {
+      await phone.screenshot({ path: testInfo.outputPath(`phone-${template}.png`) });
+    }
+  }
+  await page.locator('.editor-pane').evaluate(element => { element.scrollTop = 0; });
+  await page.screenshot({ path: testInfo.outputPath('five-template-workbench.png'), fullPage: true });
+  await page.reload();
+  await expect(page.getByLabel('新人姓名', { exact: true })).toHaveValue('林岚 & 周屿');
+  expect((await projectFromApi(page, id)).document.templateId).toBe('gallery');
+  await expect(frame.locator('body')).toHaveAttribute('data-template', 'gallery');
 });

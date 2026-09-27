@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { ImportObservation, ProjectRecord, StudioSettings } from '../shared/model.js';
+import { TEMPLATE_IDS } from '../shared/templates.js';
 import { StudioError } from './errors.js';
 
 const id = z.string().min(1).max(128).regex(/^[a-zA-Z0-9_-]+$/);
@@ -33,7 +34,7 @@ export const projectSchema = z.object({
     fields: z.object({ salutation: visibleText, coupleNames: visibleText, weddingDate: z.object({ value: date, visible: z.boolean() }).strict(), studioName: visibleText, photographerName: visibleText, projectNo: visibleText }).strict(),
     deliveryDate: z.object({ mode: z.enum(['auto', 'manual']), manualDate: date, visible: z.boolean() }).strict(),
     brand: z.object({ tagline: short, accent: z.string().regex(/^#[0-9a-fA-F]{6}$/), logo: ref.nullable() }).strict(),
-    templateId: z.enum(['editorial', 'cinematic']), templateVersion: z.number().int().positive(), comparisonLayout: z.enum(['stacked', 'split']), blocks: z.array(block).max(200),
+    templateId: z.enum(TEMPLATE_IDS), templateVersion: z.number().int().positive(), comparisonLayout: z.enum(['stacked', 'split']), blocks: z.array(block).max(200),
     output: z.object({ mode: z.enum(['pdf', 'image', 'both']), imageWidth: z.number().int().min(600).max(2160), segmentHeight: z.number().int().min(1000).max(30000), allowImageSegments: z.boolean(), allowComparisonPageBreak: z.boolean() }).strict(),
   }).strict(),
   assets: z.array(z.object({ id, tenantId: id, projectId: id, rootId: id, relativePath: z.string().max(2000), versions: z.array(version).min(1).max(1000), latestVersionId: id }).strict()).max(10000),

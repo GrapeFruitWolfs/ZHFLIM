@@ -70,6 +70,19 @@ export class SqliteStudioStore implements StudioStore {
     }
     return project;
   }
+  saveProjectWithRecord<T>(project: ProjectRecord, expectedRevision: number, kind: string, id: string, record: T): ProjectRecord {
+    // The project report and its durable run cursor describe one operation. Persist both or neither.
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const saved = this.saveProject(project, expectedRevision);
+      this.putRecord(kind, id, record);
+      this.db.exec('COMMIT');
+      return saved;
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+  }
   listPresets(): Preset[] { return [...structuredClone(BUILTIN_PRESETS), ...this.listRecords<Preset>('preset')]; }
   assetPath(projectId: string, versionId: string): { path: string; version: AssetVersion } {
     const project = this.getProject(projectId);

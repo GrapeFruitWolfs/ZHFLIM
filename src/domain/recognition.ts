@@ -73,10 +73,12 @@ export function reconcileComparisons(project: ProjectRecord, rootId: string, obs
     group[match.role].push(observation.relativePath);
     groups.set(match.sourceKey, group);
   }
-  const allComparisons = () => project.document.blocks.flatMap(block => block.type === 'comparisons' ? block.comparisons : []);
+  const comparisons = project.document.blocks.flatMap(block => block.type === 'comparisons' ? block.comparisons : []);
+  const bySourceKey = new Map(comparisons.filter(item => item.sourceKey).map(item => [item.sourceKey!, item]));
+  const manuallyUsedAssets = new Set(comparisons.filter(item => item.locked).flatMap(item => [item.before?.assetId, item.after?.assetId]).filter((id): id is string => !!id));
   report.paired = 0; report.incomplete = 0;
   for (const [sourceKey, group] of groups) {
-    let current = allComparisons().find(item => item.sourceKey === sourceKey);
+    let current = bySourceKey.get(sourceKey);
     if (current?.locked) {
       if (current.before && current.after) report.paired++;
       else { report.incomplete++; report.issues.push({ code: 'PAIR_INCOMPLETE', message: '保留了人工配对；这组仍缺少一侧图片，可继续手工补齐。', paths: [...group.before, ...group.after], sourceKey }); }
@@ -90,7 +92,7 @@ export function reconcileComparisons(project: ProjectRecord, rootId: string, obs
     const before = group.before[0] ? assets.get(group.before[0].toLowerCase()) : undefined;
     const after = group.after[0] ? assets.get(group.after[0].toLowerCase()) : undefined;
     // Do not resurrect a group when its assets already belong to a manual pairing.
-    const usedManually = allComparisons().some(item => item.locked && item.id !== current?.id && [item.before?.assetId, item.after?.assetId].some(id => id && (id === before?.id || id === after?.id)));
+    const usedManually = (before && manuallyUsedAssets.has(before.id)) || (after && manuallyUsedAssets.has(after.id));
     if (usedManually) continue;
     if (!current && (before || after)) {
       let block = project.document.blocks.find((item): item is ComparisonBlock => item.type === 'comparisons');
@@ -104,6 +106,7 @@ export function reconcileComparisons(project: ProjectRecord, rootId: string, obs
       }
       current = { id: newId(), title: `Comparison ${group.label}`, order: block.comparisons.length, visible: true, before: null, after: null, sourceKey, locked: false };
       block.comparisons.push(current);
+      bySourceKey.set(sourceKey, current);
     }
     const reference = (asset: Asset) => ({ assetId: asset.id, versionId: asset.latestVersionId });
     if (current) {
@@ -118,6 +121,19 @@ export function reconcileComparisons(project: ProjectRecord, rootId: string, obs
       report.issues.push({ code: uploadMissing ? 'IMAGE_NOT_IMPORTED' : 'PAIR_INCOMPLETE', message: uploadMissing ? '发现了图片但尚未完成导入，请检查失败记录或重新导入。' : `这组缺少 ${!group.before.length ? 'Before' : 'After'} 图片。`, paths, sourceKey });
     }
   }
+}
+
+export function reorientAutomaticComparisons(project: ProjectRecord, rootId: string, previousRule: RecognitionRule, nextRule: RecognitionRule): number {
+  const numeric = new Set<RecognitionRule>(['after-first', 'before-first']);
+  if (previousRule === nextRule || !numeric.has(previousRule) || !numeric.has(nextRule)) return 0;
+  let changed = 0;
+  for (const block of project.document.blocks) if (block.type === 'comparisons') for (const comparison of block.comparisons) {
+    if (comparison.locked || !comparison.sourceKey?.startsWith(`${rootId}:`)) continue;
+    // Move existing references rather than re-selecting latest versions or relying on source availability.
+    [comparison.before, comparison.after] = [comparison.after, comparison.before];
+    changed++;
+  }
+  return changed;
 }
 
 export function preserveManualDecisions(previous: ProjectRecord, incoming: ProjectRecord): void {

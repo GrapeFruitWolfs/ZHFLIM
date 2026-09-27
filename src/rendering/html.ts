@@ -1,20 +1,33 @@
-import type { OutputTarget } from '../shared/model.js';
+import type { OutputTarget, TemplateId } from '../shared/model.js';
 import { escapeHtml as e, type DisplayBlock, type DisplayDocument, type DisplayImage, type FontBundle } from './display.js';
-import { sharedCss, templates } from './templates.js';
+import { sharedCss, templates, type TemplateDefinition } from './templates.js';
 
 /** Small paragraphs are safe pagination units; no content is discarded. */
 export function textChunks(value: string, max = 220): string[] {
+  if (!Number.isInteger(max) || max < 2) throw new RangeError('Text chunk size must be an integer of at least two characters.');
   const chunks: string[] = [];
-  for (const paragraph of value.split(/\n\s*\n/)) {
-    const characters = Array.from(paragraph);
-    while (characters.length > max) {
-      let boundary = max;
-      for (let index = max; index > max * 0.65; index--) {
-        if (/[。！？；.!?;\n\s]/.test(characters[index - 1])) { boundary = index; break; }
+  const characters = Array.from(value);
+  for (let start = 0; start < characters.length;) {
+    const limit = Math.min(start + max, characters.length);
+    let end = start; let hardLines = 1;
+    while (end < limit) {
+      if (characters[end] === '\r' || characters[end] === '\n') {
+        // Short pasted checklists can contain many visual lines despite having few characters.
+        if (hardLines === 6) break;
+        hardLines += 1;
+        if (characters[end] === '\r' && characters[end + 1] === '\n') {
+          if (end + 1 >= limit) break;
+          end += 2; continue;
+        }
       }
-      chunks.push(characters.splice(0, boundary).join(''));
+      end += 1;
     }
-    if (characters.length) chunks.push(characters.join(''));
+    if (end === limit && limit < characters.length) {
+      for (let index = end; index > start + max * 0.65; index--) {
+        if (/[。！？；.!?;\n\s]/.test(characters[index - 1]) && !(characters[index - 1] === '\r' && characters[index] === '\n')) { end = index; break; }
+      }
+    }
+    chunks.push(characters.slice(start, end).join('')); start = end;
   }
   return chunks;
 }
@@ -23,9 +36,62 @@ function unit(content: string, className = '', attributes = ''): string {
   return `<div class="unit ${className}" ${attributes}>${content}</div>`;
 }
 
-function chapter(block: DisplayBlock, index: number): string {
+function chapter(block: DisplayBlock, index: number, templateId: TemplateId): string {
   const captions = { intro: 'Wedding collection', deliveries: 'Your collection', text: 'Production notes', comparisons: 'The art of colour', signature: 'With gratitude' };
-  return unit(`<span class="chapter-index">${String(index).padStart(2, '0')} /</span><h2 class="chapter-heading">${e(block.title)}</h2><div class="chapter-caption">${captions[block.type]}</div>`, 'chapter', `data-keep-next="true" data-block="${e(block.id)}"`);
+  const number = String(index).padStart(2, '0');
+  const heading = `<h2 class="chapter-heading">${e(block.title)}</h2><div class="chapter-caption">${captions[block.type]}</div>`;
+  const content = templateId === 'archive'
+    ? `<span class="chapter-index">RECORD<br>${number}</span><div>${heading}</div>`
+    : templateId === 'correspondence'
+      ? `<span class="chapter-index">Note ${number}.</span>${heading}`
+      : templateId === 'gallery'
+        ? `<span class="chapter-index">COLLECTION / ${number}</span>${heading}<span class="gallery-chapter-line" aria-hidden="true"></span>`
+        : `<span class="chapter-index">${number} /</span>${heading}`;
+  return unit(content, 'chapter', `data-keep-next="true" data-block="${e(block.id)}"`);
+}
+
+type Intro = Extract<DisplayBlock, { type: 'intro' }>;
+function dateLine(block: Intro): string {
+  const dates = [[block.weddingDate, 'Wedding day'], [block.deliveryDate, 'Delivered on']].filter(([date]) => date !== undefined);
+  return dates.length ? `<div class="date-line">${dates.map(([date, label]) => `<div><span class="date-label">${label}</span><span class="date-value">${e(date?.replaceAll('-', ' · '))}</span></div>`).join('')}</div>` : '';
+}
+
+function cover(block: Intro, template: TemplateDefinition, display: DisplayDocument): string {
+  const salutation = block.salutation !== undefined ? `<p class="salutation">${e(block.salutation)}</p>` : '';
+  const names = block.names !== undefined ? `<div class="couple-names">${e(block.names)}</div>` : '';
+  const projectNo = block.projectNo !== undefined ? `<div class="access-note">项目编号 · ${e(block.projectNo)}</div>` : '';
+  const identity = `${salutation}${names}${dateLine(block)}${projectNo}`;
+  const hero = `<div class="cover-kicker">${e(template.heroLabel)}</div><h1 class="cover-title">${e(template.heroTitle)}</h1>`;
+  const attrs = `data-block="${e(block.id)}"`;
+  if (template.id === 'archive') {
+    const rows = [[block.names, 'THE COUPLE', 'archive-names'], [block.weddingDate, 'WEDDING DAY', ''], [block.deliveryDate, 'DELIVERED ON', ''], [block.projectNo, 'PROJECT NO.', '']];
+    const ledger = rows.filter(([value]) => value !== undefined).map(([value, label, className]) => `<div><dt>${label}</dt><dd class="${className}">${e(value)}</dd></div>`).join('');
+    return unit(`<div><div class="archive-register"><span>DELIVERY RECORD</span><span>PRIVATE EDITION</span></div><h1 class="cover-title">${e(template.heroTitle)}</h1><div class="cover-kicker">${e(template.heroLabel)}</div></div><div>${salutation}${ledger ? `<dl class="archive-ledger">${ledger}</dl>` : ''}</div>`, 'cover archive-cover', attrs);
+  }
+  if (template.id === 'correspondence') {
+    return unit(`<div class="letter-opening"><div class="cover-kicker">${e(template.heroLabel)}</div>${block.salutation !== undefined ? `<p class="letter-address">${e(block.salutation)}</p>` : ''}<h1 class="cover-title${block.names ? '' : ' letter-fallback'}">${e(block.names || template.heroTitle)}</h1><div class="letter-dedication">A day to keep.<br>A story to return to.</div></div><div class="cover-bottom">${dateLine(block)}${projectNo}</div>`, 'cover letter-cover', attrs);
+  }
+  if (template.id === 'gallery') {
+    // Reuse only an already-visible After image; never select from unreferenced project assets.
+    const featured = display.blocks.flatMap(item => item.type === 'comparisons' ? item.comparisons : []).find(item => item.after)?.after;
+    const poster = featured ? `<img src="${featured.uri}" width="${featured.width}" height="${featured.height}" alt="本次交付中的调色成片" />` : '<div class="gallery-poster-art" aria-hidden="true"><i></i><i></i><i></i></div>';
+    return unit(`<div>${hero}</div><figure class="gallery-poster">${poster}</figure><div class="cover-bottom">${identity}</div>`, 'cover gallery-cover', attrs);
+  }
+  return unit(`<div class="cover-ornament" aria-hidden="true"></div><div>${hero}</div><div class="cover-bottom">${identity}</div>`, 'cover', attrs);
+}
+
+function signature(block: Extract<DisplayBlock, { type: 'signature' }>, templateId: TemplateId): string {
+  const photographer = block.photographer !== undefined ? `<div class="signature-name">${e(block.photographer)}</div>` : '';
+  const studio = block.studio !== undefined ? `<div class="signature-studio">${e(block.studio)}</div>` : '';
+  const caption = `<div class="signature-caption">${e(block.title || 'With gratitude')}</div>`;
+  const content = templateId === 'archive'
+    ? `${caption}<div class="signature-mark">Carefully produced.<br>Personally delivered.</div><div class="archive-credit"><span class="archive-credit-label">PRODUCTION<br>CREDIT</span><div>${photographer}${studio}</div></div>`
+    : templateId === 'correspondence'
+      ? `${caption}<div class="signature-mark">With gratitude,</div>${photographer}${studio}<div class="letter-signoff" aria-hidden="true"></div>`
+      : templateId === 'gallery'
+        ? `${caption}<div class="signature-mark">Thank you<br>for being here.</div><div class="gallery-credit">${photographer}${studio}</div>`
+        : `${caption}<div class="signature-mark">Made to be remembered.</div>${photographer}${studio}`;
+  return unit(content, 'signature', `data-block="${e(block.id)}"`);
 }
 
 function figure(image: DisplayImage | undefined, role: 'before' | 'after'): string {
@@ -40,35 +106,42 @@ export function renderHtml(display: DisplayDocument, target: OutputTarget, fonts
   let chapterIndex = 0;
   for (const block of display.blocks) {
     if (block.type === 'intro') {
-      const dates = [[block.weddingDate, 'Wedding day'], [block.deliveryDate, 'Delivered on']].filter(([date]) => date !== undefined);
-      body.push(unit(`<div class="cover-ornament" aria-hidden="true"></div><div><div class="cover-kicker">${e(template.heroLabel)}</div><h1 class="cover-title">${e(template.heroTitle)}</h1></div><div class="cover-bottom">${block.salutation !== undefined ? `<p class="salutation">${e(block.salutation)}</p>` : ''}${block.names !== undefined ? `<div class="couple-names">${e(block.names)}</div>` : ''}${dates.length ? `<div class="date-line">${dates.map(([date, label]) => `<div><span class="date-label">${label}</span><span class="date-value">${e(date?.replaceAll('-', ' · '))}</span></div>`).join('')}</div>` : ''}${block.projectNo !== undefined ? `<div class="access-note">项目编号 · ${e(block.projectNo)}</div>` : ''}</div>`, 'cover', `data-block="${e(block.id)}"`));
+      body.push(cover(block, template, display));
     } else if (block.type === 'text') {
-      body.push(chapter(block, ++chapterIndex));
+      body.push(chapter(block, ++chapterIndex, template.id));
       for (const chunk of textChunks(block.content)) body.push(unit(`<p class="body-copy">${e(chunk)}</p>`, '', `data-block="${e(block.id)}"`));
     } else if (block.type === 'deliveries') {
-      body.push(chapter(block, ++chapterIndex));
+      body.push(chapter(block, ++chapterIndex, template.id));
       block.items.forEach((item, index) => {
-        body.push(unit(`<div class="delivery-heading"><span class="item-number">${String(index + 1).padStart(2, '0')}</span><div><h3 class="item-title">${e(item.title)}</h3>${item.format ? `<span class="item-format">${e(item.format)}</span>` : ''}</div></div>`, '', `data-keep-next="${Boolean(item.description || item.links.length || item.accessNote)}" data-block="${e(block.id)}"`));
+        const number = `${template.id === 'archive' ? 'ASSET ' : template.id === 'correspondence' ? 'Enclosure ' : ''}${String(index + 1).padStart(2, '0')}`;
+        body.push(unit(`<div class="delivery-heading"><span class="item-number">${number}</span><div><h3 class="item-title">${e(item.title)}</h3>${item.format ? `<span class="item-format">${e(item.format)}</span>` : ''}</div></div>`, '', `data-keep-next="${Boolean(item.description || item.links.length || item.accessNote)}" data-block="${e(block.id)}"`));
         for (const chunk of textChunks(item.description)) body.push(unit(`<p class="body-copy delivery-copy">${e(chunk)}</p>`, '', `data-block="${e(block.id)}"`));
         if (item.links.length) {
-          const links = target === 'pdf' ? item.links.map(link => `<a class="delivery-link" href="${e(link.url)}" target="_blank" rel="noreferrer noopener">${e(link.label)}<span class="link-arrow">↗</span></a>`).join('')
-            : `<div class="qr-links">${item.links.map(link => `<div class="qr-link">${link.qr ? `<img class="qr-image" src="${link.qr}" alt="${e(link.label)}二维码" />` : '<div class="missing-image">请更换稳定分享链接</div>'}<div class="qr-label">${e(link.label)}</div><div class="qr-host">${e(link.host)}</div></div>`).join('')}</div><p class="qr-hint">长按识别二维码，或保存后从相册识别</p>`;
-          body.push(unit(links, 'delivery-access', `data-block="${e(block.id)}"`));
+          if (target === 'pdf') {
+            const links = item.links.map(link => `<a class="delivery-link" href="${e(link.url)}" target="_blank" rel="noreferrer noopener">${e(link.label)}<span class="link-arrow">↗</span></a>`).join('');
+            body.push(unit(links, 'delivery-access', `data-block="${e(block.id)}"`));
+          } else for (const link of item.links) {
+            // Each access method is one complete pagination unit: QR, label and host stay together.
+            const qr = `<div class="qr-links"><div class="qr-link">${link.qr ? `<img class="qr-image" src="${link.qr}" alt="${e(link.label)}二维码" />` : '<div class="missing-image">请更换稳定分享链接</div>'}<div class="qr-label">${e(link.label)}</div><div class="qr-host">${e(link.host)}</div></div></div><p class="qr-hint">长按识别二维码，或保存后从相册识别</p>`;
+            body.push(unit(qr, 'delivery-access', `data-block="${e(block.id)}"`));
+          }
         }
         for (const chunk of textChunks(item.accessNote)) body.push(unit(`<p class="access-note">${e(chunk)}</p>`, '', `data-block="${e(block.id)}"`));
       });
     } else if (block.type === 'comparisons') {
-      body.push(chapter(block, ++chapterIndex));
+      body.push(chapter(block, ++chapterIndex, template.id));
       for (const comparison of block.comparisons) {
-        const heading = `<div class="comparison-heading"><span>${e(comparison.title || '调色对比')}</span><span class="comparison-number">No. ${comparison.number}</span></div>`;
+        const label = template.id === 'archive' ? 'FIG.' : template.id === 'gallery' ? 'STUDY' : template.id === 'correspondence' ? 'Plate' : 'No.';
+        const heading = `<div class="comparison-heading"><span>${e(comparison.title || '调色对比')}</span><span class="comparison-number">${label} ${comparison.number}</span></div>`;
         body.push(unit(`${heading}<div class="comparison-pair ${block.layout}">${figure(comparison.before, 'before')}${figure(comparison.after, 'after')}</div>`, 'comparison-unit', `data-comparison="${e(comparison.id)}" data-block="${e(block.id)}"`));
       }
     } else if (block.type === 'signature') {
-      body.push(unit(`<div class="signature-caption">${e(block.title || 'With gratitude')}</div><div class="signature-mark">Made to be remembered.</div>${block.photographer !== undefined ? `<div class="signature-name">${e(block.photographer)}</div>` : ''}${block.studio !== undefined ? `<div class="signature-studio">${e(block.studio)}</div>` : ''}`, 'signature', `data-block="${e(block.id)}"`));
+      body.push(signature(block, template.id));
     }
   }
   const brand = display.logo ? `<img class="brand-logo" src="${display.logo.uri}" alt="工作室标志" />` : `<span class="brand-name">${e(display.studio ?? '')}</span>`;
-  const masthead = `${brand}<span class="edition">Wedding collection</span>`;
+  const edition = template.id === 'archive' ? 'Production archive' : template.id === 'correspondence' ? 'With you, always.' : template.id === 'gallery' ? 'Private exhibition' : 'Wedding collection';
+  const masthead = `${brand}<span class="edition">${edition}</span>`;
   const closing = display.tagline ? unit(e(display.tagline), 'closing') : '';
   return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=432"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; font-src data: 'self'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"><title>${e(safeTitle)}</title><style>${fonts.css}\n:root{--background:${template.background};--foreground:${template.foreground};--muted:${template.muted};--line:${template.line};--panel:${template.panel};--accent:${display.accent || template.accent}}${sharedCss}\n${template.css}</style></head><body data-template="${template.id}" data-target="${target}"><main class="render-root"><div class="flow"><header class="masthead">${masthead}</header><div class="units">${body.join('\n')}${closing}</div></div></main></body></html>`;
 }

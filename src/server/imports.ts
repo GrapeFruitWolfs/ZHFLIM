@@ -4,7 +4,7 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { newId, type Asset, type AssetVersion, type ImportObservation, type ImportReport, type ProjectRecord, type RecognitionRule } from '../shared/model.js';
 import { normalizeRelativePath } from '../domain/validation.js';
-import { createImportReport, reconcileComparisons, selectDocumentImages, supportedImage } from '../domain/recognition.js';
+import { createImportReport, reconcileComparisons, reorientAutomaticComparisons, selectDocumentImages, supportedImage } from '../domain/recognition.js';
 import { StudioError } from '../domain/errors.js';
 import type { SqliteStudioStore } from './store.js';
 
@@ -43,16 +43,20 @@ export function beginImport(store: SqliteStudioStore, projectId: string, input: 
   const rootId = input.rootId || newId();
   let root = project.importRoots.find(item => item.id === rootId);
   if (input.rootId && !root) throw new StudioError('IMPORT_ROOT', '指定的素材来源不属于本项目。', 404);
+  const reoriented = root ? reorientAutomaticComparisons(project, rootId, root.rule, input.rule) : 0;
   if (!root) { root = { id: rootId, label: input.label || '项目素材', rule: input.rule, createdAt: new Date().toISOString() }; project.importRoots.push(root); }
   else { root.label = input.label || root.label; root.rule = input.rule; }
   const seen = new Set<string>();
   const observations: ImportObservation[] = [];
   const report = createImportReport(rootId, input.files);
+  if (reoriented) report.issues.push({ code: 'PAIR_DIRECTION_UPDATED', message: `已按新的识别顺序调整 ${reoriented} 组自动配对；人工修正的关系和已选图片版本保持不变。请预览确认方向。`, paths: [] });
   for (const file of input.files) {
     const key = file.relativePath.toLowerCase();
     if (seen.has(key)) report.issues.push({ code: 'DUPLICATE_PATH', message: '来源索引有重复或大小写冲突的路径，已保留第一条，请核对目录。', paths: [file.relativePath] });
     else { seen.add(key); observations.push(file); }
   }
+  const missingPaths = project.assets.filter(asset => asset.rootId === rootId && !seen.has(asset.relativePath.toLowerCase())).map(asset => asset.relativePath);
+  if (missingPaths.length) report.issues.push({ code: 'SOURCE_MISSING', message: `本次所选目录未发现 ${missingPaths.length} 张此前导入的来源图片。已保留文档配对与管理副本，请核对是否选对来源目录或移动过文件。`, paths: missingPaths.slice(0, 100) });
   const selection = selectDocumentImages(rootId, root.label, observations, root.rule, input.includeUnclassifiedImages);
   if (selection.unclassifiedImagePaths.length) report.issues.push({ code: 'UNCLASSIFIED_IMAGES_SKIPPED', message: `${selection.unclassifiedImagePaths.length} 张其他图片仅建立目录索引，未复制到文档库；需要时可明确选择导入。`, paths: selection.unclassifiedImagePaths.slice(0, 20) });
   project.importReports.push(report);
@@ -60,8 +64,8 @@ export function beginImport(store: SqliteStudioStore, projectId: string, input: 
   const selected = new Set(selection.imagePaths);
   reconcileComparisons(project, rootId, observations.filter(item => selected.has(item.relativePath)), report);
   limitIssues(report);
-  const saved = store.saveProject(project, project.draftRevision);
-  store.putRecord<ImportRun>('import-run', runKey(projectId, rootId), { projectId, rootId, observations, imagePaths: selection.imagePaths, reportId: report.id, processedPaths: [], finalized: false });
+  const run: ImportRun = { projectId, rootId, observations, imagePaths: selection.imagePaths, reportId: report.id, processedPaths: [], finalized: false };
+  const saved = store.saveProjectWithRecord(project, project.draftRevision, 'import-run', runKey(projectId, rootId), run);
   return { project: saved, rootId, report, ...selection };
 }
 async function writeImmutable(path: string, bytes: Buffer) {
@@ -155,11 +159,14 @@ export async function importImage(store: SqliteStudioStore, projectId: string, r
       const selected = new Set(run.imagePaths);
       reconcileComparisons(project, rootId, run.observations.filter(item => selected.has(item.relativePath)), report);
       limitIssues(report);
-      const saved = store.saveProject(project, project.draftRevision);
-      store.putRecord('import-run', runKey(projectId, rootId), run);
+      const saved = store.saveProjectWithRecord(project, project.draftRevision, 'import-run', runKey(projectId, rootId), run);
       return { project: saved, asset: saved.assets.find(item => item.id === asset!.id)!, report };
     } catch (error) {
-      const failure = error instanceof StudioError ? error : new StudioError('IMAGE_DECODE_FAILED', '图片读取失败、像素超过 4000 万或文件损坏，请换用 JPEG／PNG 导出图。', 422);
+      const code = (error as NodeJS.ErrnoException | undefined)?.code;
+      const storageFailure = !!code && (code.startsWith('ERR_SQLITE') || ['ENOSPC', 'EDQUOT', 'EACCES', 'EPERM', 'EROFS', 'EIO', 'EMFILE', 'ENFILE', 'ENOENT'].includes(code));
+      const failure = error instanceof StudioError ? error : storageFailure
+        ? new StudioError('STORAGE_WRITE_FAILED', '图片保存失败，请检查数据目录的可写权限、磁盘空间或存储状态后重试。已登记的图片与版本保持不变。', 500)
+        : new StudioError('IMAGE_DECODE_FAILED', '图片读取失败、像素超过 4000 万或文件损坏，请换用 JPEG／PNG 导出图。', 422);
       if (!['IMPORT_FINISHED', 'FILE_NOT_SCANNED', 'FILE_NOT_SELECTED'].includes(failure.code)) recordFailure(store, projectId, rootId, reportId, relativePath, failure.message);
       throw failure;
     }
@@ -170,13 +177,16 @@ export function finalizeImport(store: SqliteStudioStore, projectId: string, root
   const run = currentRun(store, projectId, rootId);
   if (importId && importId !== run.reportId) throw new StudioError('IMPORT_FINISHED', '本次导入已被新的扫描替换，不能结束另一批导入。', 409);
   const report = getReport(project, run);
+  if (run.finalized) return { project, report };
   report.cancelled = cancelled;
   run.finalized = true;
+  const processed = new Set(run.processedPaths);
+  const unfinished = run.imagePaths.filter(path => !processed.has(path.toLowerCase()));
+  if (unfinished.length) report.issues.push({ code: 'IMPORT_INCOMPLETE', message: `${unfinished.length} 张已选图片尚未完成本次导入或内容校验，请重新选择同一来源重试。此前已保存的图片仍然保留。`, paths: unfinished.slice(0, 100) });
   const selected = new Set(run.imagePaths);
   reconcileComparisons(project, rootId, run.observations.filter(item => selected.has(item.relativePath)), report);
   limitIssues(report);
-  const saved = store.saveProject(project, project.draftRevision);
-  store.putRecord('import-run', runKey(projectId, rootId), run);
+  const saved = store.saveProjectWithRecord(project, project.draftRevision, 'import-run', runKey(projectId, rootId), run);
   return { project: saved, report };
 }
 export function acceptAssetVersion(store: SqliteStudioStore, projectId: string, assetId: string, versionId: string, expectedRevision: number) {

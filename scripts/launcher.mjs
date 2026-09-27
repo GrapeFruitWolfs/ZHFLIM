@@ -1,9 +1,10 @@
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
-const root = dirname(fileURLToPath(import.meta.url));
+// An explicit root is useful for the source-tree smoke check; the portable launcher needs no arguments.
+const root = process.argv[2] ? resolve(process.argv[2]) : dirname(fileURLToPath(import.meta.url));
 const port = Number(process.env.WDS_PORT || 4318);
 if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error('WDS_PORT is invalid.');
 const url = `http://127.0.0.1:${port}`;
@@ -27,25 +28,29 @@ if (await health()) {
 } else {
   if (!existsSync(join(root, 'dist-server', 'index.js'))) throw new Error('The application build is missing. Extract the complete release archive first.');
   const appData = process.env.LOCALAPPDATA;
-  const env = {
-    ...process.env,
-    NODE_ENV: 'production',
-    WDS_PORT: String(port),
-    WDS_DATA_DIR: process.env.WDS_DATA_DIR || (process.platform === 'win32' && appData ? join(appData, 'WeddingDeliveryStudio') : join(root, '.studio-data')),
-    WDS_CHROMIUM_PATH: process.env.WDS_CHROMIUM_PATH || (process.platform === 'win32' ? join(root, 'chromium', 'chrome-win64', 'chrome.exe') : '')
+  process.env.NODE_ENV = 'production';
+  process.env.WDS_PORT = String(port);
+  const bundledChrome = join(root, 'chromium', 'chrome-win64', 'chrome.exe');
+  if (!process.env.WDS_CHROMIUM_PATH && process.platform === 'win32' && existsSync(bundledChrome)) process.env.WDS_CHROMIUM_PATH = bundledChrome;
+  const dataDir = process.env.WDS_DATA_DIR || (process.platform === 'win32' && appData ? join(appData, 'WeddingDeliveryStudio') : join(root, '.studio-data'));
+  // Run the server in this process. Closing the Windows console must not orphan a child server.
+  const { buildApp } = await import(pathToFileURL(join(root, 'dist-server', 'index.js')).href);
+  const app = await buildApp({ port, rootDir: root, dataDir });
+  let closing = false;
+  const close = () => {
+    if (closing) return;
+    closing = true;
+    void app.close().catch(error => { console.error(error.message); process.exitCode = 1; });
   };
-  const child = spawn(process.execPath, [join(root, 'dist-server', 'index.js')], { cwd: root, env, stdio: 'inherit' });
-  let stopped = false;
-  child.on('exit', code => { stopped = true; process.exitCode = code ?? 1; });
-  child.on('error', error => { stopped = true; console.error(error.message); process.exitCode = 1; });
-  process.on('SIGINT', () => { child.kill('SIGINT'); });
-  process.on('SIGTERM', () => { child.kill('SIGTERM'); });
+  process.once('SIGINT', close);
+  process.once('SIGTERM', close);
   console.log('Starting Wedding Delivery Studio. Keep this window open while working.');
-  let ready = false;
-  for (let attempt = 0; attempt < 60 && !stopped; attempt++) {
-    if (await health()) { ready = true; break; }
-    await new Promise(resolve => setTimeout(resolve, 500));
+  try {
+    await app.listen({ host: '127.0.0.1', port });
+    console.log(`Ready: ${url}`);
+    open();
+  } catch (error) {
+    await app.close();
+    throw error;
   }
-  if (ready) { console.log(`Ready: ${url}`); open(); }
-  else if (!stopped) { console.error('Startup did not complete. Check the messages above; no other process will be stopped.'); child.kill('SIGTERM'); process.exitCode = 1; }
 }

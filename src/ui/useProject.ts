@@ -109,6 +109,25 @@ export function useProject(initial: ProjectRecord) {
   }, []);
 
   useEffect(() => {
+    const saveShortcut = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
+        event.preventDefault();
+        void flush().catch(() => undefined);
+      }
+    };
+    const persistWhenHidden = () => {
+      if (document.visibilityState === "hidden")
+        void flush().catch(() => undefined);
+    };
+    window.addEventListener("keydown", saveShortcut);
+    document.addEventListener("visibilitychange", persistWhenHidden);
+    return () => {
+      window.removeEventListener("keydown", saveShortcut);
+      document.removeEventListener("visibilitychange", persistWhenHidden);
+    };
+  }, [flush]);
+
+  useEffect(() => {
     const beforeUnload = (event: BeforeUnloadEvent) => {
       if (edits.current !== acknowledged.current) {
         event.preventDefault();

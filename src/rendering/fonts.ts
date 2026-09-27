@@ -8,7 +8,7 @@ export async function checkGlyphCoverage(display: DisplayDocument, rootDir: stri
   for (const filename of ['NotoSansSC.ttf', 'SourceSerif4.ttf']) {
     let loaded: Awaited<ReturnType<typeof fontBytes>>;
     try { loaded = await fontBytes(rootDir, filename); }
-    catch { return []; } // loadFonts reports the explicit system-fallback warning during setup.
+    catch { return []; } // loadFonts blocks formal output and warns during quick preview.
     try {
       if (!parsedFonts.has(loaded.hash)) {
         const parsed = create(loaded.bytes);

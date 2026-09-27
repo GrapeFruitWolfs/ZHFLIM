@@ -1,6 +1,7 @@
+import type { TemplateId } from './templates.js';
+export type { TemplateId } from './templates.js';
 export type OutputTarget = 'pdf' | 'image';
 export type OutputMode = OutputTarget | 'both';
-export type TemplateId = 'editorial' | 'cinematic';
 export type ComparisonLayout = 'stacked' | 'split';
 export type RecognitionRule = 'after-first' | 'before-first' | 'words' | 'manual';
 export interface VisibleText { value: string; visible: boolean }

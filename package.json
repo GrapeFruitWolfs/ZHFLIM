@@ -12,7 +12,8 @@
     "typecheck": "tsc --noEmit",
     "test": "tsx --test --test-concurrency=1 tests/*.test.ts",
     "test:e2e": "playwright test",
-    "package:windows": "node scripts/package-windows.mjs"
+    "package:windows": "node scripts/package-windows.mjs",
+    "test:runtime": "node scripts/smoke-runtime.mjs"
   },
   "dependencies": {
     "@fastify/multipart": "^9.3.0",

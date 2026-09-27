@@ -5,8 +5,9 @@ import sharp from 'sharp';
 import QRCode from 'qrcode';
 import type { AssetRef, ComparisonLayout, DeliveryDocument, Issue, ProjectRecord, StudioSettings, TemplateId } from '../shared/model.js';
 import type { StudioStore } from '../server/contracts.js';
+import { TEMPLATE_IDS } from '../shared/templates.js';
 
-export const RENDERER_VERSION = 'studio-renderer-1';
+export const RENDERER_VERSION = 'studio-renderer-2';
 export const RENDER_BUDGET = { comparisons: 100, decodedPixels: 120_000_000, sourceBytes: 512 * 1024 * 1024, managedBytes: 256 * 1024 * 1024, visibleCharacters: 200_000, htmlBytes: 96 * 1024 * 1024 };
 export const digest = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
 export const escapeHtml = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]!);
@@ -125,7 +126,7 @@ export async function prepareDisplay(project: ProjectRecord, store: StudioStore,
     templateId: document.templateId, accent: /^#[a-f\d]{6}$/i.test(document.brand.accent) ? document.brand.accent : '#a2835d',
     tagline: document.brand.tagline, studio: shown(document.fields.studioName), blocks: [], output: structuredClone(document.output),
   };
-  if (!['editorial', 'cinematic'].includes(document.templateId) || document.templateVersion !== 1) issues.push(makeIssue('TEMPLATE_UNSUPPORTED', '当前模板版本不受支持，请选择可用模板。'));
+  if (!TEMPLATE_IDS.includes(document.templateId) || document.templateVersion !== 1) issues.push(makeIssue('TEMPLATE_UNSUPPORTED', '当前模板版本不受支持，请选择可用模板。'));
   if (!['stacked', 'split'].includes(document.comparisonLayout)) issues.push(makeIssue('LAYOUT_UNSUPPORTED', '当前图片布局不受支持。'));
 
   async function image(ref: AssetRef | null, blockId?: string, comparisonId?: string, logo = false): Promise<DisplayImage | undefined> {
@@ -235,7 +236,11 @@ export async function loadFonts(rootDir: string, embed = true): Promise<FontBund
       hashes[filename] = hash;
       const source = embed ? `data:font/ttf;base64,${bytes.toString('base64')}` : `/fonts/${filename}`;
       styles.push(`@font-face{font-family:'${family}';font-style:normal;font-weight:100 900;font-display:block;src:url(${source}) format('truetype')}`);
-    } catch { issues.push(makeIssue('FONT_FALLBACK', `${filename} 尚未准备，将暂用系统后备字体。正式交付前请检查中文字形与分页。`, 'warning')); }
+    } catch {
+      issues.push(embed
+        ? makeIssue('FONT_UNAVAILABLE', `${filename} 缺失或无法读取，请恢复应用自带的字体文件后重新生成正式预览。`)
+        : makeIssue('FONT_FALLBACK', `${filename} 尚未准备，快速预览暂用系统字体；正式输出需要恢复打包字体。`, 'warning'));
+    }
   }
   return { css: styles.join('\n'), hashes, issues };
 }
