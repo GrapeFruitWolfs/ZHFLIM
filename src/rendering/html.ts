@@ -1,6 +1,7 @@
 import type { OutputTarget, TemplateId } from '../shared/model.js';
 import { escapeHtml as e, type DisplayBlock, type DisplayDocument, type DisplayImage, type FontBundle } from './display.js';
 import { sharedCss, templates, type TemplateDefinition } from './templates.js';
+import { storyCss } from './editorial.js';
 
 /** Small paragraphs are safe pagination units; no content is discarded. */
 export function textChunks(value: string, max = 220): string[] {
@@ -47,7 +48,7 @@ function chapter(block: DisplayBlock, index: number, templateId: TemplateId): st
       : templateId === 'gallery'
         ? `<span class="chapter-index">COLLECTION / ${number}</span>${heading}<span class="gallery-chapter-line" aria-hidden="true"></span>`
         : `<span class="chapter-index">${number} /</span>${heading}`;
-  return unit(content, 'chapter', `data-keep-next="true" data-block="${e(block.id)}"`);
+  return unit(content, `chapter${block.type === 'text' && block.content.trim().length <= 120 ? ' compact-chapter' : ''}`, `data-keep-next="true" data-block="${e(block.id)}"`);
 }
 
 type Intro = Extract<DisplayBlock, { type: 'intro' }>;
@@ -57,6 +58,16 @@ function dateLine(block: Intro): string {
 }
 
 function cover(block: Intro, template: TemplateDefinition, display: DisplayDocument): string {
+  if (block.cover || template.id === 'editorial') {
+    const settings = block.cover;
+    const headline = settings?.headline ?? '属于你们的婚礼影像。';
+    const heading = block.names || headline || '婚礼影像';
+    const photo = settings?.image ? `<figure class="story-photo"><img src="${settings.image.uri}" width="${settings.image.width}" height="${settings.image.height}" alt="本次婚礼的封面画面" /></figure>` : '';
+    const greeting = block.salutation ? `<p class="salutation">${e(block.salutation)}</p>` : '';
+    const introduction = `<div><p class="story-kicker">WEDDING COLLECTION · 私人影像珍藏</p>${greeting}<h1 class="story-name">${e(heading)}</h1>${block.names && headline ? `<p class="story-headline">${e(headline)}</p>` : ''}</div>`;
+    const message = settings?.message ? `<p class="story-message">${e(settings.message)}</p>` : '';
+    return unit(`${introduction}${photo}${message}<div>${dateLine(block)}${block.projectNo ? `<p class="access-note">交付编号 · ${e(block.projectNo)}</p>` : ''}</div>`, `story-cover ${settings?.emphasis === 'photo' ? 'photo-first' : 'names-first'}`, `data-block="${e(block.id)}" data-cover="true"`);
+  }
   const salutation = block.salutation !== undefined ? `<p class="salutation">${e(block.salutation)}</p>` : '';
   const names = block.names !== undefined ? `<div class="couple-names">${e(block.names)}</div>` : '';
   const projectNo = block.projectNo !== undefined ? `<div class="access-note">项目编号 · ${e(block.projectNo)}</div>` : '';
@@ -90,7 +101,7 @@ function signature(block: Extract<DisplayBlock, { type: 'signature' }>, template
       ? `${caption}<div class="signature-mark">With gratitude,</div>${photographer}${studio}<div class="letter-signoff" aria-hidden="true"></div>`
       : templateId === 'gallery'
         ? `${caption}<div class="signature-mark">Thank you<br>for being here.</div><div class="gallery-credit">${photographer}${studio}</div>`
-        : `${caption}<div class="signature-mark">Made to be remembered.</div>${photographer}${studio}`;
+        : `${caption}<div class="signature-mark">${templateId === 'editorial' ? '愿每次重温，<br>都能想起那天的温度。' : 'Made to be remembered.'}</div>${photographer}${studio}`;
   return unit(content, 'signature', `data-block="${e(block.id)}"`);
 }
 
@@ -103,6 +114,17 @@ export function renderHtml(display: DisplayDocument, target: OutputTarget, fonts
   const title = display.blocks.find(block => block.type === 'intro');
   const safeTitle = title?.type === 'intro' && title.names ? title.names : 'Wedding Collection';
   const body: string[] = [];
+  const appendix: Extract<DisplayBlock, { type: 'text' }>[] = [];
+  const renderDetails = (block: Extract<DisplayBlock, { type: 'text' }>, inAppendix = false): string[] => {
+    const details = block.details;
+    if (!details || (!details.content.trim() && !details.image)) return [];
+    const attrs = `data-block="${e(block.id)}"`;
+    const units = [unit(`<h3 class="detail-heading">${e(inAppendix ? block.title : '制作细节')}</h3>`, 'detail-unit', `${attrs} data-keep-next="true"`)];
+    const chunks = textChunks(details.content, 180);
+    for (const [index, chunk] of chunks.entries()) units.push(unit(`<p class="detail-copy">${e(chunk)}</p>`, 'detail-unit', `${attrs}${details.image && index === chunks.length - 1 ? ' data-keep-next="true"' : ''}`));
+    if (details.image) units.push(unit(`<figure class="production-figure"><img src="${details.image.uri}" width="${details.image.width}" height="${details.image.height}" alt="${e(details.caption || block.title + '制作说明图')}" />${details.caption ? `<figcaption>${e(details.caption)}</figcaption>` : ''}</figure>`, 'detail-unit', attrs));
+    return units;
+  };
   let chapterIndex = 0;
   for (const block of display.blocks) {
     if (block.type === 'intro') {
@@ -110,6 +132,8 @@ export function renderHtml(display: DisplayDocument, target: OutputTarget, fonts
     } else if (block.type === 'text') {
       body.push(chapter(block, ++chapterIndex, template.id));
       for (const chunk of textChunks(block.content)) body.push(unit(`<p class="body-copy">${e(chunk)}</p>`, '', `data-block="${e(block.id)}"`));
+      if (block.details?.placement === 'inline') body.push(...renderDetails(block));
+      else if (block.details?.placement === 'appendix') appendix.push(block);
     } else if (block.type === 'deliveries') {
       body.push(chapter(block, ++chapterIndex, template.id));
       block.items.forEach((item, index) => {
@@ -134,6 +158,7 @@ export function renderHtml(display: DisplayDocument, target: OutputTarget, fonts
         const label = template.id === 'archive' ? 'FIG.' : template.id === 'gallery' ? 'STUDY' : template.id === 'correspondence' ? 'Plate' : 'No.';
         const heading = `<div class="comparison-heading"><span>${e(comparison.title || '调色对比')}</span><span class="comparison-number">${label} ${comparison.number}</span></div>`;
         body.push(unit(`${heading}<div class="comparison-pair ${block.layout}">${figure(comparison.before, 'before')}${figure(comparison.after, 'after')}</div>`, 'comparison-unit', `data-comparison="${e(comparison.id)}" data-block="${e(block.id)}"`));
+        for (const chunk of textChunks(comparison.description ?? '', 180)) body.push(unit(`<p class="comparison-description">${e(chunk)}</p>`, '', `data-block="${e(block.id)}"`));
       }
     } else if (block.type === 'signature') {
       body.push(signature(block, template.id));
@@ -143,5 +168,7 @@ export function renderHtml(display: DisplayDocument, target: OutputTarget, fonts
   const edition = template.id === 'archive' ? 'Production archive' : template.id === 'correspondence' ? 'With you, always.' : template.id === 'gallery' ? 'Private exhibition' : 'Wedding collection';
   const masthead = `${brand}<span class="edition">${edition}</span>`;
   const closing = display.tagline ? unit(e(display.tagline), 'closing') : '';
-  return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=432"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; font-src data: 'self'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"><title>${e(safeTitle)}</title><style>${fonts.css}\n:root{--background:${template.background};--foreground:${template.foreground};--muted:${template.muted};--line:${template.line};--panel:${template.panel};--accent:${display.accent || template.accent}}${sharedCss}\n${template.css}</style></head><body data-template="${template.id}" data-target="${target}"><main class="render-root"><div class="flow"><header class="masthead">${masthead}</header><div class="units">${body.join('\n')}${closing}</div></div></main></body></html>`;
+  const appendixUnits = appendix.flatMap(block => renderDetails(block, true));
+  const appendixHtml = appendixUnits.length ? unit('<h2 class="appendix-title">制作附录</h2><p class="appendix-caption">这份影像背后的技术细节与制作记录。</p>', 'appendix-start', `data-keep-next="true" ${target === 'pdf' ? 'data-page-before="true"' : ''}`) + appendixUnits.join('\n') : '';
+  return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=432"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; font-src data: 'self'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"><title>${e(safeTitle)}</title><style>${fonts.css}\n:root{--background:${template.background};--foreground:${template.foreground};--muted:${template.muted};--line:${template.line};--panel:${template.panel};--accent:${display.accent || template.accent}}${sharedCss}\n${template.css}\n${storyCss}</style></head><body data-template="${template.id}" data-target="${target}"><main class="render-root"><div class="flow"><header class="masthead">${masthead}</header><div class="units">${body.join('\n')}${closing}${appendixHtml}</div></div></main></body></html>`;
 }

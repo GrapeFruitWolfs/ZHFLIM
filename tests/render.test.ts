@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import sharp from 'sharp';
 import Fastify from 'fastify';
-import { createDeliveryItem, createProject, createTextBlock } from '../src/shared/defaults.js';
+import { createCover, createDeliveryItem, createProject, createTextBlock } from '../src/shared/defaults.js';
 import type { AssetVersion, ComparisonBlock, ProjectRecord, StudioSettings } from '../src/shared/model.js';
 import type { StudioStore } from '../src/server/contracts.js';
 import { candidateIsStale, digest, loadFonts, prepareDisplay, resolvedDeliveryDate, safeDeliveryUrl, settingsFingerprint } from '../src/rendering/display.js';
@@ -170,6 +170,42 @@ test('selected asset version is hash verified and never silently replaced by lat
   assert.ok(broken.issues.some(issue => issue.code === 'ASSET_UNAVAILABLE' && issue.assetId === 'asset-0'));
 });
 
+test('personalized covers and production appendices obey visibility, glyph coverage and immutable asset checks', async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'wds-story-assets-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const store = new MemoryStore(directory, sample());
+  await addPortraits(store, directory);
+  const intro = store.current.document.blocks.find(block => block.type === 'intro')!;
+  if (intro.type !== 'intro') throw new Error('Missing intro');
+  intro.cover = { ...createCover(), image: { assetId: 'asset-0', versionId: 'version-0' }, headline: 'COVER_TITLE', message: 'COVER_MESSAGE' };
+  const comparisons = store.current.document.blocks.find(block => block.type === 'comparisons')!;
+  comparisons.visible = false;
+  const note = { ...createTextBlock('PRODUCTION_TITLE', 'VISIBLE_SUMMARY'), details: { content: 'HIDDEN_DETAIL' + String.fromCodePoint(0x10ffff), image: { assetId: 'asset-1', versionId: 'version-1' }, caption: 'HIDDEN_CAPTION', placement: 'hidden' as 'hidden' | 'appendix' } };
+  store.current.document.blocks.push(note);
+  let prepared = await prepareDisplay(store.current, store, '2026-09-28');
+  assert.equal(prepared.assets.length, 1);
+  assert.deepEqual(await checkGlyphCoverage(prepared.display, process.cwd()), []);
+  let html = renderHtml(prepared.display, 'pdf', { css: '', hashes: {}, issues: [] });
+  assert.ok(html.includes('COVER_MESSAGE'));
+  assert.ok(!html.includes('HIDDEN_DETAIL') && !html.includes('HIDDEN_CAPTION'));
+  note.details.placement = 'appendix';
+  note.details.content = 'VISIBLE_DETAIL';
+  prepared = await prepareDisplay(store.current, store, '2026-09-28');
+  assert.equal(prepared.assets.length, 2);
+  html = renderHtml(prepared.display, 'pdf', { css: '', hashes: {}, issues: [] });
+  assert.ok(html.indexOf('VISIBLE_DETAIL') > html.indexOf('class="unit signature"'));
+  assert.ok(html.includes('data-page-before="true"'));
+  await writeFile(store.paths.get('version-1')!.path, 'corrupted');
+  const broken = await prepareDisplay(store.current, store, '2026-09-28');
+  assert.ok(broken.issues.some(issue => issue.code === 'ASSET_UNAVAILABLE' && issue.blockId === note.id));
+  note.details.placement = 'hidden';
+  intro.visible = false;
+  prepared = await prepareDisplay(store.current, store, '2026-09-28');
+  assert.equal(prepared.assets.length, 0);
+  assert.ok(!prepared.issues.some(issue => issue.code === 'ASSET_UNAVAILABLE'));
+  assert.ok(!JSON.stringify(prepared.display).includes('COVER_MESSAGE'));
+});
+
 test('Chromium paginates pasted hard lines and keeps each QR access method together in short segments', { timeout: 120_000 }, async t => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'wds-render-lines-')); t.after(() => rm(directory, { recursive: true, force: true }));
   const store = new MemoryStore(directory, sample());
@@ -241,7 +277,7 @@ test('Chromium produces real PDF and bounded long-image segments without truncat
   assert.ok(pdf[0].pages! > 2); assert.equal((await readFile(pdf[0].path)).subarray(0, 5).toString(), '%PDF-');
   if (existsSync('/usr/bin/pdftotext')) {
     const extracted = await promisify(execFile)('/usr/bin/pdftotext', [pdf[0].path, '-']);
-    assert.ok(extracted.stdout.includes('最终段落完整保留。'));
+    assert.ok(extracted.stdout.replace(/\s+/g, '').includes('最终段落完整保留。'));
   }
   await assert.rejects(renderTarget(browser, renderHtml(prepared.display, 'image', fonts), 'image', store.current.document.output, path.join(directory, 'blocked')), (error: unknown) => error instanceof RenderFailure && error.code === 'IMAGE_TOO_LONG');
   const images = await renderTarget(browser, renderHtml(prepared.display, 'image', fonts), 'image', { ...store.current.document.output, allowImageSegments: true }, path.join(directory, 'image'));

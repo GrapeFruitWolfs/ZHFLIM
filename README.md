@@ -6,7 +6,7 @@ Wedding Production OS 的第一阶段：帮助婚礼摄影师／摄像师组织�
 
 ## 当前状态
 
-已从设计阶段进入 **v0.1.0 本地可运行 MVP**：浏览器工作台 + 本机服务。可创建与保存项目、编辑交付内容、导入目录、整理调色对比、选择两套初始模板，并生成真实 PDF／长图。具体实现与验收边界见 [实现说明](docs/IMPLEMENTATION.md)。
+当前为 **v0.2.0 本地可运行 MVP**：浏览器工作台 + 本机服务。支持项目管理、目录导入、调色对比、五套模板及真实 PDF／长图；新增个性化封面、制作详情／附录、对比说明与私人影像展册主设计。详见 [v0.2.0 说明](docs/RELEASE_0_2_0.md)。
 
 用户已确认：
 
@@ -39,10 +39,13 @@ npm start
 npm test
 npm run build
 npm run test:e2e
+npm run review:visual
 npm run package:windows
 ```
 
 `package:windows` 下载官方 Node／Chrome for Testing，并安装 Windows x64 原生依赖，需联网。首次生成 PDF／长图也会启动随包浏览器，但不会从网络下载项目资源或字体。
+
+`review:visual` 使用虚构资料和带边框的横／竖测试图，调用正式渲染器生成五套模板的 PDF、长图、封面对照图和可直接打开的 `index.html`，保存到独立的 `release/visual-review/<时间>/`。样张不读取现有项目，不含真实照片；它用于排版核查，不能替代真实照片与手机显示效果确认。
 
 ## 第一次使用
 
@@ -59,6 +62,8 @@ npm run package:windows
 Windows 默认数据目录：`%LOCALAPPDATA%\WeddingDeliveryStudio`。直接源码启动时，Linux/macOS 默认为 `~/.local/share/wedding-delivery-studio`。用 `WDS_DATA_DIR` 可显式指定目录，`WDS_PORT` 可指定端口。
 
 数据包括 SQLite、受管理的图片副本、预览快照和导出文件。**先退出 Studio，再备份整个数据目录**，不要只复制 SQLite 主文件。复制新版本程序不等于迁移或备份数据。导入不会修改、移动或删除源文件。
+
+v0.2.0 会升级工作区兼容标记，以保护新增封面和制作详情；旧版本不能直接打开升级后的工作区。需要回退时恢复升级前的完整备份。
 
 当前尚无自动备份、历史产物清理和加密存储；含客户资料的本地文件请使用 Windows 账户权限和磁盘加密保护。
 
@@ -78,6 +83,6 @@ Windows 默认数据目录：`%LOCALAPPDATA%\WeddingDeliveryStudio`。直接源�
 
 ## 后续验证资料
 
-目前尚未收到实际 Canva 模板、示例交付 PDF、Worker 源码或真实目录素材。使用这些资料后，需要继续验证内容完整性、字体与手机阅读效果；文档中的虚构场景仅用于规则推演。
+2026-09-28 已收到并查看用户提供的两份 Canva 交付 PDF（模板与实际案例），正在据此重新构思内容层级与排版，见 [设计方向讨论稿](docs/DESIGN_DIRECTION.md)。Worker 源码与原始项目目录素材尚未收到；PDF 中的照片可用于本地概念验证，不能替代完整的目录导入验收。
 
 真实客户资料和素材不应默认作为可公开提交的测试样本。后续如加入样例，应明确使用范围并按需脱敏。

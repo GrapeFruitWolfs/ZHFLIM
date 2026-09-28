@@ -17,6 +17,7 @@ export interface Asset {
 }
 export interface Comparison {
   id: string; title: string; order: number; visible: boolean;
+  description?: string;
   before: AssetRef | null; after: AssetRef | null;
   sourceKey?: string; locked: boolean;
 }
@@ -27,9 +28,11 @@ export interface DeliveryItem {
   visible: boolean; order: number;
 }
 interface BlockBase { id: string; title: string; visible: boolean; order: number }
-export interface IntroBlock extends BlockBase { type: 'intro' }
+export interface CoverSettings { emphasis: 'names' | 'photo'; headline: string; message: string; image: AssetRef | null }
+export interface ProductionDetails { content: string; image: AssetRef | null; caption: string; placement: 'inline' | 'appendix' | 'hidden' }
+export interface IntroBlock extends BlockBase { type: 'intro'; cover?: CoverSettings }
 export interface DeliveryBlock extends BlockBase { type: 'deliveries'; items: DeliveryItem[] }
-export interface TextBlock extends BlockBase { type: 'text'; content: string; sourceDefinitionId?: string }
+export interface TextBlock extends BlockBase { type: 'text'; content: string; sourceDefinitionId?: string; details?: ProductionDetails }
 export interface ComparisonBlock extends BlockBase { type: 'comparisons'; layout: ComparisonLayout | 'inherit'; comparisons: Comparison[] }
 export interface SignatureBlock extends BlockBase { type: 'signature' }
 export type DocumentBlock = IntroBlock | DeliveryBlock | TextBlock | ComparisonBlock | SignatureBlock;

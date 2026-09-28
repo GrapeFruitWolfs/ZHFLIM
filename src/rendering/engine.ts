@@ -18,7 +18,7 @@ export async function startRenderer(): Promise<{ browser: Browser; dependencies:
   const executablePath = process.env.WDS_CHROMIUM_PATH || (process.platform === 'linux' && existsSync('/usr/bin/chromium') ? '/usr/bin/chromium' : undefined);
   const browser = await chromium.launch({
     headless: true, executablePath, timeout: 45_000,
-    args: typeof process.getuid === 'function' && process.getuid() === 0 ? ['--no-sandbox'] : [],
+    args: [...(typeof process.getuid === 'function' && process.getuid() === 0 ? ['--no-sandbox'] : []), ...(process.platform === 'linux' ? ['--disable-dev-shm-usage'] : [])],
   });
   return { browser, dependencies: { renderer: RENDERER_VERSION, chromium: browser.version(), platform: `${process.platform}-${process.arch}` } };
 }
@@ -81,6 +81,15 @@ export async function renderTarget(browser: Browser, html: string, target: Outpu
         return element.getBoundingClientRect().height + parseFloat(style.marginTop || '0') + parseFloat(style.marginBottom || '0');
       };
       const fail = (code: string, message: string, unit?: HTMLElement) => ({ error: { code, message, blockId: unit?.dataset.block, comparisonId: unit?.dataset.comparison }, count: 0, heights: [] as number[] });
+      const compactHeadings = (group: HTMLElement[]) => {
+        if (group.length < 2) return;
+        const headings = group.slice(0, -1);
+        const context = document.createElement('div');
+        context.className = 'compact-context';
+        context.textContent = headings.map(heading => heading.textContent?.replace(/\s+/g, ' ').trim()).filter(Boolean).join(' · ');
+        headings.forEach(heading => heading.remove());
+        group[group.length - 1].prepend(context);
+      };
       // A pair is the only atomic unit allowed to split. Both resulting units keep the group identity.
       for (let index = 0; index < units.length; index++) {
         const unit = units[index];
@@ -133,16 +142,14 @@ export async function renderTarget(browser: Browser, html: string, target: Outpu
         for (let index = 0; index < units.length; index++) {
           const unit = units[index];
           if (unit.dataset.pageBefore === 'true' && body.children.length) body = addPage();
-          if (unit.dataset.keepNext === 'true' && units[index + 1] && body.children.length && body.scrollHeight <= capacity) {
-            const currentHeight = [...body.children].reduce((total, child) => total + size(child as HTMLElement), 0);
-            if (currentHeight + size(unit) + Math.min(size(units[index + 1]), capacity) > capacity) body = addPage();
-          }
-          body.append(unit);
+          const group = [unit];
+          while (units[index].dataset.keepNext === 'true' && units[index + 1] && units[index + 1].dataset.pageBefore !== 'true') group.push(units[++index]);
+          body.append(...group);
           if (body.scrollHeight > capacity + 1) {
-            unit.remove();
+            group.forEach(element => element.remove());
             if (body.children.length) body = addPage();
-            body.append(unit);
-            if (body.scrollHeight > capacity + 1) return fail('PDF_UNIT_OVERFLOW', '一个内容单元超过 PDF 单页可读范围，请缩短标题、拆分长段落或更换图片布局。', unit);
+            body.append(...group);
+            if (body.scrollHeight > capacity + 1) return fail('PDF_UNIT_OVERFLOW', `第 ${pageBodies.length} 页有内容超过可读范围，请缩短标题、拆分长段落或更换图片布局。`, unit);
           }
         }
         flow.remove();
@@ -162,18 +169,16 @@ export async function renderTarget(browser: Browser, html: string, target: Outpu
       let section = addSegment();
       for (let index = 0; index < units.length; index++) {
         const unit = units[index];
-        // Reserve room for a footer and keep chapter headings with their first content unit.
-        if (unit.dataset.keepNext === 'true' && units[index + 1] && section.children.length > 1 && section.getBoundingClientRect().height + size(unit) + size(units[index + 1]) + 64 > imageCap) {
-          if (!allowImageSegments) return fail('IMAGE_TOO_LONG', '长图超过当前安全高度，请开启“允许长图分段”后重新预览。', unit);
-          section = addSegment();
-        }
-        section.append(unit);
+        const group = [unit];
+        while (units[index].dataset.keepNext === 'true' && units[index + 1]) group.push(units[++index]);
+        section.append(...group);
         if (section.getBoundingClientRect().height + 64 > imageCap) {
-          unit.remove();
+          group.forEach(element => element.remove());
           if (!allowImageSegments) return fail('IMAGE_TOO_LONG', '长图超过当前安全高度，请开启“允许长图分段”后重新预览。', unit);
           if (section.children.length > 1) section = addSegment();
-          section.append(unit);
-          if (section.getBoundingClientRect().height + 64 > imageCap) return fail('IMAGE_UNIT_OVERFLOW', '一个内容单元超过长图单段高度，请增加每段高度或调整图片布局。', unit);
+          section.append(...group);
+          if (section.getBoundingClientRect().height + 64 > imageCap) compactHeadings(group);
+          if (section.getBoundingClientRect().height + 64 > imageCap) return fail('IMAGE_UNIT_OVERFLOW', `第 ${sections.length} 段有内容超过长图高度，请增加每段高度或调整图片布局。`, unit);
         }
       }
       flow.remove();

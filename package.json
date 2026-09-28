@@ -1,6 +1,6 @@
 {
   "name": "wedding-delivery-studio",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -15,7 +15,10 @@
     "test": "tsx --test --test-concurrency=1 tests/*.test.ts",
     "test:e2e": "playwright test",
     "package:windows": "node scripts/package-windows.mjs",
-    "test:runtime": "node scripts/smoke-runtime.mjs"
+    "test:runtime": "node scripts/smoke-runtime.mjs",
+    "review:visual": "tsx scripts/visual-review.ts",
+    "review:case": "tsx scripts/render-case.ts",
+    "build:previews": "tsx scripts/template-previews.ts"
   },
   "dependencies": {
     "@fastify/multipart": "^9.3.0",

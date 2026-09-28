@@ -61,11 +61,14 @@ test('browser workflow: directory recognition, manual control, persistence and r
     const card = page.locator('.comparison-card');
     await expect(card).toHaveCount(1);
     await expect(card.locator('img')).toHaveCount(2);
+    await page.getByLabel('对比组 1 说明', { exact: true }).fill('保留完整构图，整理肤色与现场光线。');
+    await saved(page);
     await expect(page.getByRole('button', { name: '交换前后' })).toBeEnabled();
     expect(uploads).toHaveLength(2);
     let record = await projectFromApi(page, projectId);
     expect(record.assets).toHaveLength(2);
     const initial = record.document.blocks.flatMap(block => block.type === 'comparisons' ? block.comparisons : [])[0];
+    expect(initial.description).toBe('保留完整构图，整理肤色与现场光线。');
     const originalBefore = initial.before;
     await page.getByRole('button', { name: '交换前后' }).click();
     await expect(card.getByText('手动调整', { exact: true })).toBeVisible();
@@ -82,12 +85,15 @@ test('browser workflow: directory recognition, manual control, persistence and r
     await page.locator('.template-card[data-template="cinematic"]').click();
     await page.getByRole('button', { name: /Stacked · 上下/ }).click();
     await saved(page);
+    await expect(page.frameLocator('iframe[title="交付文档手机预览"]').locator('body')).toHaveAttribute('data-template', 'cinematic');
+    await expect(page.locator('.phone-frame .preview-loading')).toHaveCount(0);
+    await page.locator('.editor-pane').evaluate(element => { element.scrollTop = 0; });
     await page.screenshot({ path: testInfo.outputPath('workbench-cinematic.png'), fullPage: true });
     await page.reload();
     await expect(page.getByLabel('新人姓名', { exact: true })).toHaveValue('林岚 & 周屿');
     await expect(page.locator('.preview-footer')).toContainText('Cinematic');
 
-    const prepared = page.waitForResponse(response => response.url().endsWith(`/api/projects/${projectId}/candidates`) && response.request().method() === 'POST');
+    const prepared = page.waitForResponse(response => response.url().endsWith(`/api/projects/${projectId}/candidates`) && response.request().method() === 'POST', { timeout: 120000 });
     await page.getByRole('button', { name: '检查并导出' }).click();
     const candidateResponse = await prepared;
     expect(candidateResponse.status()).toBe(200);
@@ -143,6 +149,51 @@ test('failed saves retain input and block stale candidate generation', async ({ 
   await page.getByRole('button', { name: '重试保存', exact: true }).click();
   await saved(page);
   expect((await projectFromApi(page, id)).document.fields.coupleNames.value).toBe('未保存的新人姓名');
+});
+
+test('cover upload, production appendix and hidden details survive reopen and formal output', async ({ page }, testInfo) => {
+  const id = await createInBrowser(page, '私人展册 · 封面与制作附录');
+  await page.getByLabel('新人姓名', { exact: true }).fill('林岚 & 周屿');
+  await page.getByLabel('婚礼日期', { exact: true }).fill('2026-09-12');
+  await page.getByLabel('封面版式', { exact: true }).selectOption('photo');
+  await page.getByLabel('封面短句', { exact: true }).fill('这一天，值得重温。');
+  await page.getByLabel('开篇寄语', { exact: true }).fill('为真实的情绪，留一份影像。');
+  await page.getByRole('button', { name: '选择封面图', exact: true }).click();
+  const picker = page.getByRole('dialog', { name: '选择封面图' });
+  await picker.locator('input[type="file"]').setInputFiles({ name: 'cover.png', mimeType: 'image/png', buffer: await sharp({ create: { width: 1280, height: 720, channels: 3, background: '#9caa8e' } }).png().toBuffer() });
+  await expect(picker).toHaveCount(0);
+  await saved(page);
+  const frame = page.frameLocator('iframe[title="交付文档手机预览"]');
+  await expect(frame.locator('.story-cover')).toHaveClass(/photo-first/);
+  await expect(frame.locator('.story-photo img')).toBeVisible();
+  await page.locator('.block-nav-item').filter({ hasText: '为你交付' }).locator('button').first().click();
+  await page.getByLabel('下载链接', { exact: true }).fill('https://example.com/wedding-demo');
+  await page.locator('.block-nav-item').filter({ hasText: 'LOG 工作流' }).locator('button').first().click();
+  await page.getByLabel('技术说明', { exact: true }).fill('PRIVATE_HIDDEN_TECHNICAL_NOTE');
+  await saved(page);
+  const hidden = await page.request.get(`/api/projects/${id}/preview?target=pdf`);
+  expect(await hidden.text()).not.toContain('PRIVATE_HIDDEN_TECHNICAL_NOTE');
+  await page.getByLabel('技术说明', { exact: true }).fill('使用统一色彩管理，保留高光与暗部层次。');
+  await page.getByLabel('制作详情位置', { exact: true }).selectOption('appendix');
+  await page.getByRole('button', { name: '选择制作说明图', exact: true }).click();
+  await page.getByRole('dialog', { name: '选择制作说明图' }).locator('.picker-grid button').first().click();
+  await page.getByLabel('制作图说明', { exact: true }).fill('测试用制作说明图，图注必须紧随图片。');
+  await saved(page);
+  await expect(frame.locator('.appendix-title')).toHaveText('制作附录');
+  await page.reload();
+  await expect(page.getByLabel('封面版式', { exact: true })).toHaveValue('photo');
+  await expect(page.getByLabel('开篇寄语', { exact: true })).toHaveValue('为真实的情绪，留一份影像。');
+  const record = await projectFromApi(page, id);
+  expect(record.assets).toHaveLength(1);
+  expect(record.document.blocks.find(block => block.type === 'text')?.details?.placement).toBe('appendix');
+  const prepared = page.waitForResponse(response => response.url().endsWith(`/api/projects/${id}/candidates`) && response.request().method() === 'POST', { timeout: 120000 });
+  await page.getByRole('button', { name: '检查并导出', exact: true }).click();
+  const candidate = await (await prepared).json() as PreviewCandidate;
+  expect(candidate.issues.filter(issue => issue.severity === 'error')).toEqual([]);
+  expect(candidate.results.map(result => result.status)).toEqual(['ready', 'ready']);
+  await page.getByRole('dialog').getByRole('button', { name: '关闭', exact: true }).click();
+  await expect(page.locator('.phone-frame .preview-loading')).toHaveCount(0);
+  await page.locator('.phone-frame').screenshot({ path: testInfo.outputPath('personalized-cover.png') });
 });
 
 test('five distinct templates persist and phone preview recovers without duplicate refreshes', async ({ page }, testInfo) => {

@@ -22,11 +22,11 @@ export async function checkGlyphCoverage(display: DisplayDocument, rootDir: stri
   texts.push({ value: display.tagline });
   for (const block of display.blocks) {
     if (block.type !== 'intro') texts.push({ value: block.title, blockId: block.id });
-    if (block.type === 'intro') for (const value of [block.salutation, block.names, block.weddingDate, block.deliveryDate, block.projectNo]) texts.push({ value, blockId: block.id });
-    if (block.type === 'text') texts.push({ value: block.content, blockId: block.id });
+    if (block.type === 'intro') for (const value of [block.salutation, block.names, block.weddingDate, block.deliveryDate, block.projectNo, block.cover?.headline, block.cover?.message]) texts.push({ value, blockId: block.id });
+    if (block.type === 'text') for (const value of [block.content, block.details?.content, block.details?.image ? block.details.caption : undefined]) texts.push({ value, blockId: block.id });
     if (block.type === 'signature') for (const value of [block.photographer, block.studio]) texts.push({ value, blockId: block.id });
     if (block.type === 'deliveries') for (const item of block.items) for (const value of [item.title, item.description, item.format, item.accessNote]) texts.push({ value, blockId: block.id });
-    if (block.type === 'comparisons') for (const comparison of block.comparisons) texts.push({ value: comparison.title, blockId: block.id, comparisonId: comparison.id });
+    if (block.type === 'comparisons') for (const comparison of block.comparisons) for (const value of [comparison.title, comparison.description]) texts.push({ value, blockId: block.id, comparisonId: comparison.id });
   }
   const missing = new Map<string, { characters: Set<string>; blockId?: string; comparisonId?: string }>();
   const coverage = new Map<number, boolean>();

@@ -1,8 +1,11 @@
 import {
+  cloneElement,
+  isValidElement,
   useCallback,
   useEffect,
   useRef,
   useState,
+  useId,
   type ReactNode,
 } from "react";
 import {
@@ -75,6 +78,8 @@ import {
   createComparison,
   createDeliveryItem,
   createTextBlock,
+  createCover,
+  createProductionDetails,
 } from "../shared/defaults";
 import { api, ApiError, errorMessage, post, setSessionToken } from "./api";
 import {
@@ -250,11 +255,15 @@ function Field({
   children: ReactNode;
   hint?: string;
 }) {
+  const labelId = useId();
+  const control = isValidElement<{ "aria-labelledby"?: string; "aria-describedby"?: string }>(children)
+    ? cloneElement(children, { "aria-labelledby": labelId, ...(hint ? { "aria-describedby": `${labelId}-hint` } : {}) })
+    : children;
   return (
     <label className="field">
-      <span className="field-label">{label}</span>
-      {children}
-      {hint && <span className="field-hint">{hint}</span>}
+      <span className="field-label" id={labelId}>{label}</span>
+      {control}
+      {hint && <span className="field-hint" id={`${labelId}-hint`}>{hint}</span>}
     </label>
   );
 }
@@ -1025,7 +1034,20 @@ function SettingsPage({
 
 type SlotTarget =
   | { blockId: string; comparisonId: string; side: "before" | "after" }
+  | { blockId: string; purpose: "cover" | "evidence" }
   | "logo";
+
+function selectImage(project: ProjectRecord, target: SlotTarget, ref: AssetRef) {
+  if (target === "logo") { project.document.brand.logo = ref; return; }
+  const block = project.document.blocks.find(item => item.id === target.blockId);
+  if ("purpose" in target) {
+    if (target.purpose === "cover" && block?.type === "intro") block.cover = { ...createCover(), ...block.cover, image: ref };
+    if (target.purpose === "evidence" && block?.type === "text") block.details = { ...createProductionDetails(), placement: "inline", ...block.details, image: ref };
+  } else if (block?.type === "comparisons") {
+    const comparison = block.comparisons.find(item => item.id === target.comparisonId);
+    if (comparison) { comparison[target.side] = ref; comparison.locked = true; }
+  }
+}
 function Workbench({
   initial,
   presets,
@@ -1234,23 +1256,7 @@ function Workbench({
       assetId: asset.id,
       versionId: asset.latestVersionId,
     };
-    edit((draft) => {
-      if (target === "logo") draft.document.brand.logo = ref;
-      else {
-        const block = draft.document.blocks.find(
-          (item) => item.id === target.blockId,
-        );
-        if (block?.type === "comparisons") {
-          const comparison = block.comparisons.find(
-            (item) => item.id === target.comparisonId,
-          );
-          if (comparison) {
-            comparison[target.side] = ref;
-            comparison.locked = true;
-          }
-        }
-      }
-    });
+    edit((draft) => selectImage(draft, target, ref));
     setPicker(null);
   };
   const refreshRecord = async () => {
@@ -1355,22 +1361,7 @@ function Workbench({
           versionId: firstAsset.latestVersionId,
         };
         const updated = structuredClone(latest);
-        if (options.target === "logo") updated.document.brand.logo = ref;
-        else {
-          const target = options.target;
-          const block = updated.document.blocks.find(
-            (item) => item.id === target.blockId,
-          );
-          if (block?.type === "comparisons") {
-            const group = block.comparisons.find(
-              (item) => item.id === target.comparisonId,
-            );
-            if (group) {
-              group[target.side] = ref;
-              group.locked = true;
-            }
-          }
-        }
+        selectImage(updated, options.target, ref);
         latest = await api<ProjectRecord>(`/api/projects/${project.id}`, {
           method: "PUT",
           body: JSON.stringify({
@@ -1918,6 +1909,7 @@ function Workbench({
                   update={updateBlock}
                   onAssets={() => setTab("assets")}
                   onPickLogo={() => setPicker("logo")}
+                  onPickImage={(purpose) => setPicker({ blockId: currentBlock.id, purpose })}
                 />
               </fieldset>
             ) : (
@@ -2186,6 +2178,53 @@ function Workbench({
   );
 }
 
+function DocumentImage({ project, image, label, onPick, onRemove }: {
+  project: ProjectRecord; image: AssetRef | null; label: string; onPick: () => void; onRemove: () => void;
+}) {
+  return <div className="document-image-editor">
+    {image && <img src={`/api/projects/${project.id}/assets/${image.versionId}`} alt={label} />}
+    <div className="inline-actions">
+      <button className="button button-outline button-small" onClick={onPick}><ImagePlus size={16} />{image ? `替换${label}` : `选择${label}`}</button>
+      {image && <button className="text-button danger" onClick={onRemove}>移除{label}</button>}
+    </div>
+  </div>;
+}
+
+function CoverEditor({ project, block, update, onPick }: {
+  project: ProjectRecord; block: Extract<DocumentBlock, { type: "intro" }>;
+  update: (block: DocumentBlock) => void; onPick: () => void;
+}) {
+  const cover = block.cover ?? createCover();
+  const change = (values: Partial<typeof cover>) => update({ ...block, cover: { ...cover, ...values } });
+  return <div className="cover-editor">
+    <div className="field-divider"><span>封面与寄语</span><small>图片保留完整构图</small></div>
+    <Field label="封面版式"><select aria-label="封面版式" value={block.cover ? cover.emphasis : "template"} onChange={event => {
+      if (event.target.value === "template") { const next = { ...block }; delete next.cover; update(next); }
+      else change({ emphasis: event.target.value as "names" | "photo" });
+    }}><option value="template">模板默认</option><option value="names">姓名主导 · 信息在前</option><option value="photo">照片主导 · 画面在前</option></select></Field>
+    <Field label="封面短句"><input maxLength={120} value={block.cover?.headline ?? ""} placeholder="属于你们的婚礼影像。" onChange={event => change({ headline: event.target.value })} /></Field>
+    <Field label="开篇寄语"><textarea maxLength={600} rows={3} value={cover.message} placeholder="写给这一次婚礼的短短几句话。" onChange={event => change({ message: event.target.value })} /></Field>
+    <DocumentImage project={project} image={cover.image} label="封面图" onPick={onPick} onRemove={() => change({ image: null })} />
+    <p className="field-hint">选择项目中的成片，或上传一张代表性画面。切换版式不会裁切照片。</p>
+  </div>;
+}
+
+function ProductionEditor({ project, block, update, onPick }: {
+  project: ProjectRecord; block: Extract<DocumentBlock, { type: "text" }>;
+  update: (block: DocumentBlock) => void; onPick: () => void;
+}) {
+  const details = block.details ?? createProductionDetails();
+  const change = (values: Partial<typeof details>) => update({ ...block, details: { ...details, ...values } });
+  return <div className="production-editor">
+    <div className="field-divider"><span>制作详情与证据</span><small>可选</small></div>
+    <Field label="制作详情位置"><select aria-label="制作详情位置" value={details.placement} onChange={event => change({ placement: event.target.value as typeof details.placement })}><option value="hidden">本次不展示</option><option value="inline">紧随本节正文</option><option value="appendix">放入文末制作附录</option></select></Field>
+    <Field label="技术说明"><textarea rows={4} value={details.content} placeholder="说明具体处理方式与依据；以本次实际制作为准。" onChange={event => change({ content: event.target.value })} /></Field>
+    <DocumentImage project={project} image={details.image} label="制作说明图" onPick={onPick} onRemove={() => change({ image: null })} />
+    <Field label="制作图说明"><textarea rows={2} maxLength={2000} value={details.caption} placeholder="解释这张截图展示了什么，以及客户应该关注哪里。" onChange={event => change({ caption: event.target.value })} /></Field>
+    <p className="field-hint">选择“本次不展示”后，技术说明与图片都不会进入客户预览或导出。</p>
+  </div>;
+}
+
 function BlockEditor({
   block,
   project,
@@ -2193,6 +2232,7 @@ function BlockEditor({
   update,
   onAssets,
   onPickLogo,
+  onPickImage,
 }: {
   block: DocumentBlock;
   project: ProjectRecord;
@@ -2200,6 +2240,7 @@ function BlockEditor({
   update: (block: DocumentBlock) => void;
   onAssets: () => void;
   onPickLogo: () => void;
+  onPickImage: (purpose: "cover" | "evidence") => void;
 }) {
   const fields = project.document.fields;
   const field = (key: keyof typeof fields, value: VisibleText) =>
@@ -2302,6 +2343,7 @@ function BlockEditor({
             正式预览时按工作室时区确定，PDF 与长图保持一致。
           </p>
         )}
+        <CoverEditor project={project} block={block} update={update} onPick={() => onPickImage("cover")} />
         <div className="field-divider">
           <span>内部记录</span>
           <span className="tag">仅自己可见</span>
@@ -2336,8 +2378,9 @@ function BlockEditor({
         </Field>
         <div className="editor-tip">
           <Sparkles size={16} />
-          <span>内容会在两套模板中完整保留。切换视觉不改变你的文字。</span>
+          <span>切换模板不改变你的文字。先写客户能感受到的效果，再补充制作细节。</span>
         </div>
+        <ProductionEditor project={project} block={block} update={update} onPick={() => onPickImage("evidence")} />
       </div>
     );
   if (block.type === "signature")
@@ -2621,26 +2664,8 @@ function BlockEditor({
   );
 }
 
-const templateSamples: Record<TemplateId, { kicker: string; title: string; caption: string }> = {
-  editorial: { kicker: "WEDDING STORY", title: "The art of\nremembering.", caption: "A STORY, BEAUTIFULLY DELIVERED." },
-  cinematic: { kicker: "PRIVATE VIEWING", title: "A STORY\nIN MOTION", caption: "THE FILM · THE MOMENTS · THE MEMORY" },
-  archive: { kicker: "PRODUCTION ARCHIVE / 001", title: "A day,\ndocumented.", caption: "01 / COLLECTION     02 / COLOUR     03 / NOTES" },
-  correspondence: { kicker: "A LETTER FOR TWO", title: "Dear,\nyou & you.", caption: "With love, always." },
-  gallery: { kicker: "PRIVATE EXHIBITION", title: "STUDIES\nIN LOVE", caption: "01 / A PERSONAL COLLECTION" },
-};
-
 function TemplateSample({ id }: { id: TemplateId }) {
-  const sample = templateSamples[id];
-  return (
-    <span className={`template-sample ${id}`} aria-hidden="true">
-      <small className="sample-kicker">{sample.kicker}</small>
-      <span className="sample-title">{sample.title}</span>
-      <span className="sample-frame"><i /><i /><small>BEFORE / AFTER</small></span>
-      <span className="sample-index"><i>01</i><i>02</i><i>03</i></span>
-      <i className="sample-rule" />
-      <small className="sample-caption">{sample.caption}</small>
-    </span>
-  );
+  return <img className="template-render-preview" src={`/template-previews/${id}.png`} alt="" loading="lazy" />;
 }
 
 function VisualEditor({
@@ -2904,7 +2929,7 @@ function AssetsEditor({
   const shown = onlyProblems ? problems : groups;
   const assignDrop = (
     transfer: DataTransfer,
-    target: Exclude<SlotTarget, "logo">,
+    target: Extract<SlotTarget, { comparisonId: string }>,
   ) => {
     const assetId = transfer.getData("application/x-studio-asset");
     if (assetId) {
@@ -3211,6 +3236,17 @@ function AssetsEditor({
                 />
               ))}
             </div>
+            <div className="comparison-description-editor">
+              <Field label={`对比组 ${index + 1} 说明`}>
+                <textarea rows={2} maxLength={2000} value={comparison.description ?? ""} disabled={locked} placeholder="可选：这一组画面做了哪些调整？" onChange={event => onEdit(draft => {
+                  const target = draft.document.blocks.find(item => item.id === block.id);
+                  if (target?.type === "comparisons") {
+                    const group = target.comparisons.find(item => item.id === comparison.id);
+                    if (group) group.description = event.target.value;
+                  }
+                })} />
+              </Field>
+            </div>
             <div className="comparison-actions">
               <button
                 className="text-button"
@@ -3459,7 +3495,9 @@ function AssetPicker({
       title={
         target === "logo"
           ? "选择品牌 Logo"
-          : `选择 ${target.side === "before" ? "Before 原图" : "After 调色后图片"}`
+          : "purpose" in target
+            ? target.purpose === "cover" ? "选择封面图" : "选择制作说明图"
+            : `选择 ${target.side === "before" ? "Before 原图" : "After 调色后图片"}`
       }
       subtitle="从已导入的图片选择，或直接添加一张新图片。"
       onClose={onClose}

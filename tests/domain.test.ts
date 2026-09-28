@@ -6,8 +6,8 @@ import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import sharp from 'sharp';
-import { createProject } from '../src/shared/defaults.js';
-import { newId, type ImportObservation, type ProjectRecord } from '../src/shared/model.js';
+import { cloneBlocks, createCover, createProductionDetails, createProject, createTextBlock } from '../src/shared/defaults.js';
+import { newId, type AssetRef, type ImportObservation, type ProjectRecord } from '../src/shared/model.js';
 import { recognizePath, preserveManualDecisions } from '../src/domain/recognition.js';
 import { normalizeRelativePath, validateProject } from '../src/domain/validation.js';
 import { SqliteStudioStore } from '../src/server/store.js';
@@ -54,20 +54,58 @@ test('optimistic revision protects newer edits and SQLite survives reopen', asyn
   try { assert.equal(reopened.getProject(project.id).title, '保存的新标题'); } finally { reopened.close(); }
 });
 
+test('cover and evidence refs require owned versions and reusable presets remove project images and cover messages', async t => {
+  const { store, project } = await fixture(t);
+  const intro = project.document.blocks.find(block => block.type === 'intro')!;
+  if (intro.type !== 'intro') throw new Error('Missing intro');
+  intro.cover = { ...createCover(), image: { assetId: 'foreign', versionId: 'foreign-version' }, message: 'PRIVATE_COVER_MESSAGE' };
+  assert.throws(() => validateProject(project, project.tenantId), /图片引用/);
+  intro.cover.image = null;
+  const note = { ...createTextBlock('制作', '正文'), details: { ...createProductionDetails(), image: { assetId: 'foreign', versionId: 'foreign-version' } as AssetRef | null, caption: 'PRIVATE_CAPTION' } };
+  project.document.blocks.push(note);
+  assert.throws(() => validateProject(project, project.tenantId), /图片引用/);
+  const reused = cloneBlocks(project.document.blocks, true);
+  const fresh = createProject({ title: '复用', settings: store.getSettings() });
+  fresh.document.blocks = reused;
+  assert.doesNotThrow(() => validateProject(fresh, fresh.tenantId));
+  assert.ok(!JSON.stringify(reused).includes('PRIVATE_COVER_MESSAGE'));
+  assert.ok(!JSON.stringify(reused).includes('PRIVATE_CAPTION'));
+  note.details.image = null;
+  const saved = store.saveProject(project, project.draftRevision);
+  assert.equal(store.getProject(saved.id).document.blocks.find(block => block.type === 'intro')?.cover?.message, 'PRIVATE_COVER_MESSAGE');
+});
+
 test('opening a future SQLite schema refuses downgrade without changing its data or version', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'wds-future-schema-'));
   t.after(async () => { await rm(directory, { recursive: true, force: true }); });
   const filename = join(directory, 'workspace.sqlite');
   const future = new DatabaseSync(filename);
-  future.exec("PRAGMA user_version=2; CREATE TABLE future_marker(value TEXT); INSERT INTO future_marker VALUES('preserve-me');");
+  future.exec("PRAGMA user_version=3; CREATE TABLE future_marker(value TEXT); INSERT INTO future_marker VALUES('preserve-me');");
   future.close();
   assert.throws(() => new SqliteStudioStore(directory), /较新版本/);
   const reopened = new DatabaseSync(filename);
   try {
-    assert.equal(reopened.prepare('PRAGMA user_version').get()!.user_version, 2);
+    assert.equal(reopened.prepare('PRAGMA user_version').get()!.user_version, 3);
     assert.equal(reopened.prepare('SELECT value FROM future_marker').get()!.value, 'preserve-me');
     assert.equal(reopened.prepare("SELECT count(*) AS count FROM sqlite_master WHERE name='projects'").get()!.count, 0);
   } finally { reopened.close(); }
+});
+
+test('opening a version-one workspace keeps projects and marks the new document compatibility boundary', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'wds-upgrade-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const original = new SqliteStudioStore(directory);
+  const project = original.saveProject(createProject({ title: '旧版项目', settings: original.getSettings() }), 0);
+  original.close();
+  const database = new DatabaseSync(join(directory, 'workspace.sqlite'));
+  database.exec('PRAGMA user_version=1');
+  database.close();
+  const upgraded = new SqliteStudioStore(directory);
+  try { assert.deepEqual(upgraded.getProject(project.id), project); }
+  finally { upgraded.close(); }
+  const verified = new DatabaseSync(join(directory, 'workspace.sqlite'));
+  try { assert.equal(verified.prepare('PRAGMA user_version').get()!.user_version, 2); }
+  finally { verified.close(); }
 });
 
 test('same source import is idempotent and preserves locked, hidden manual pairing', async t => {

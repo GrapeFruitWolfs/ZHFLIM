@@ -16,6 +16,7 @@ import { SqliteStudioStore } from './store.js';
 import { registerSecurity } from './security.js';
 import { acceptAssetVersion, beginImport, finalizeImport, importImage, MAX_IMAGE_BYTES } from './imports.js';
 import type { ServerConfig } from './contracts.js';
+import packageInfo from '../../package.json' with { type: 'json' };
 
 const expectedRevisionSchema = z.number().int().nonnegative();
 const body = (value: unknown) => z.record(z.string(), z.unknown()).parse(value);
@@ -37,7 +38,7 @@ export async function buildApp(options: Partial<ServerConfig> = {}): Promise<Fas
   });
   const issueSession = registerSecurity(app, config);
   await app.register(multipart, { limits: { fileSize: MAX_IMAGE_BYTES, files: 1, fields: 4, fieldSize: 4000, parts: 5 } });
-  app.get('/api/health', async () => ({ app: 'wedding-delivery-studio', version: '0.1.0' }));
+  app.get('/api/health', async () => ({ app: 'wedding-delivery-studio', version: packageInfo.version }));
   app.get('/api/session', async (request, reply) => ({ token: issueSession(request, reply), settings: store.getSettings() }));
   app.get('/api/settings', async () => store.getSettings());
   app.put('/api/settings', async request => store.saveSettings(parseSettings(body(request.body).settings)));

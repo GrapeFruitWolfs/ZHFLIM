@@ -14,13 +14,13 @@ const url = z.string().max(6000).refine(value => {
   try { const parsed = new URL(value); return ['http:', 'https:'].includes(parsed.protocol) && !parsed.username && !parsed.password; } catch { return false; }
 }, '链接必须是 HTTP 或 HTTPS 地址，且不能包含账户密码');
 const ref = z.object({ assetId: id, versionId: id }).strict();
-const comparison = z.object({ id, title: short, order, visible: z.boolean(), before: ref.nullable(), after: ref.nullable(), sourceKey: z.string().max(3000).optional(), locked: z.boolean() }).strict();
+const comparison = z.object({ id, title: short, description: short.optional(), order, visible: z.boolean(), before: ref.nullable(), after: ref.nullable(), sourceKey: z.string().max(3000).optional(), locked: z.boolean() }).strict();
 const item = z.object({ id, title: short, description: text, format: short, method: z.enum(['link', 'attachment', 'offline', 'description']), downloadUrl: url, playbackUrl: url, accessNote: short, visible: z.boolean(), order }).strict();
 const base = { id, title: short, visible: z.boolean(), order };
 const block = z.discriminatedUnion('type', [
-  z.object({ ...base, type: z.literal('intro') }).strict(),
+  z.object({ ...base, type: z.literal('intro'), cover: z.object({ emphasis: z.enum(['names', 'photo']), headline: z.string().max(120), message: z.string().max(600), image: ref.nullable() }).strict().optional() }).strict(),
   z.object({ ...base, type: z.literal('deliveries'), items: z.array(item).max(300) }).strict(),
-  z.object({ ...base, type: z.literal('text'), content: text, sourceDefinitionId: id.optional() }).strict(),
+  z.object({ ...base, type: z.literal('text'), content: text, sourceDefinitionId: id.optional(), details: z.object({ content: text, image: ref.nullable(), caption: short, placement: z.enum(['inline', 'appendix', 'hidden']) }).strict().optional() }).strict(),
   z.object({ ...base, type: z.literal('comparisons'), layout: z.enum(['stacked', 'split', 'inherit']), comparisons: z.array(comparison).max(2000) }).strict(),
   z.object({ ...base, type: z.literal('signature') }).strict(),
 ]);
@@ -74,6 +74,8 @@ export function validateProject(value: unknown, tenantId: string): ProjectRecord
   checkRef(project.document.brand.logo);
   for (const block of project.document.blocks) {
     take(block.id);
+    if (block.type === 'intro' && block.cover) checkRef(block.cover.image);
+    if (block.type === 'text' && block.details) checkRef(block.details.image);
     if (block.type === 'deliveries') block.items.forEach(item => take(item.id));
     if (block.type === 'comparisons') block.comparisons.forEach(item => { take(item.id); checkRef(item.before); checkRef(item.after); });
   }

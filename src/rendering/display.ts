@@ -7,17 +7,18 @@ import type { AssetRef, ComparisonLayout, DeliveryDocument, Issue, ProjectRecord
 import type { StudioStore } from '../server/contracts.js';
 import { TEMPLATE_IDS } from '../shared/templates.js';
 
-export const RENDERER_VERSION = 'studio-renderer-2';
+export const RENDERER_VERSION = 'studio-renderer-4';
 export const RENDER_BUDGET = { comparisons: 100, decodedPixels: 120_000_000, sourceBytes: 512 * 1024 * 1024, managedBytes: 256 * 1024 * 1024, visibleCharacters: 200_000, htmlBytes: 96 * 1024 * 1024 };
 export const digest = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
 export const escapeHtml = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]!);
 
 export interface DisplayImage { uri: string; width: number; height: number }
 export interface DisplayLink { label: string; url: string; host: string; qr?: string }
-export interface DisplayComparison { id: string; title: string; before?: DisplayImage; after?: DisplayImage; number: string }
+export interface DisplayComparison { id: string; title: string; description?: string; before?: DisplayImage; after?: DisplayImage; number: string }
+export interface DisplayDetails { content: string; image?: DisplayImage; caption: string; placement: 'inline' | 'appendix' }
 export type DisplayBlock =
-  | { type: 'intro'; id: string; title: string; salutation?: string; names?: string; weddingDate?: string; deliveryDate?: string; projectNo?: string }
-  | { type: 'text'; id: string; title: string; content: string }
+  | { type: 'intro'; id: string; title: string; salutation?: string; names?: string; weddingDate?: string; deliveryDate?: string; projectNo?: string; cover?: { emphasis: 'names' | 'photo'; headline: string; message: string; image?: DisplayImage } }
+  | { type: 'text'; id: string; title: string; content: string; details?: DisplayDetails }
   | { type: 'deliveries'; id: string; title: string; items: { id: string; title: string; description: string; format: string; accessNote: string; links: DisplayLink[] }[] }
   | { type: 'comparisons'; id: string; title: string; layout: ComparisonLayout; comparisons: DisplayComparison[] }
   | { type: 'signature'; id: string; title: string; photographer?: string; studio?: string };
@@ -66,6 +67,8 @@ export function visibleAssetRefs(project: ProjectRecord): AssetRef[] {
   const refs: AssetRef[] = [];
   if (project.document.brand.logo) refs.push(project.document.brand.logo);
   for (const block of project.document.blocks) {
+    if (block.visible && block.type === 'intro' && block.cover?.image) refs.push(block.cover.image);
+    if (block.visible && block.type === 'text' && block.details?.placement !== 'hidden' && block.details?.image) refs.push(block.details.image);
     if (!block.visible || block.type !== 'comparisons') continue;
     for (const comparison of block.comparisons.filter(item => item.visible)) {
       if (comparison.before) refs.push(comparison.before);
@@ -97,7 +100,7 @@ export async function checkResourceBudget(project: ProjectRecord, store: StudioS
   const visibleBlocks = project.document.blocks.filter(block => block.visible);
   const comparisonCount = visibleBlocks.reduce((count, block) => count + (block.type === 'comparisons' ? block.comparisons.filter(comparison => comparison.visible).length : 0), 0);
   if (comparisonCount > RENDER_BUDGET.comparisons) return [makeIssue('RESOURCE_BUDGET', `本版一次最多输出 ${RENDER_BUDGET.comparisons} 组可见对比。请隐藏暂不交付的组，或分为不同文档。`)];
-  const textCount = visibleBlocks.reduce((count, block) => count + block.title.length + (block.type === 'text' ? block.content.length : block.type === 'deliveries' ? block.items.filter(item => item.visible).reduce((sum, item) => sum + item.title.length + item.description.length + item.accessNote.length, 0) : 0), 0);
+  const textCount = visibleBlocks.reduce((count, block) => count + block.title.length + (block.type === 'text' ? block.content.length + (block.details && block.details.placement !== 'hidden' ? block.details.content.length + block.details.caption.length : 0) : block.type === 'intro' ? (block.cover?.headline.length ?? 0) + (block.cover?.message.length ?? 0) : block.type === 'comparisons' ? block.comparisons.filter(item => item.visible).reduce((sum, item) => sum + item.title.length + (item.description?.length ?? 0), 0) : block.type === 'deliveries' ? block.items.filter(item => item.visible).reduce((sum, item) => sum + item.title.length + item.description.length + item.accessNote.length, 0) : 0), 0);
   if (textCount > RENDER_BUDGET.visibleCharacters) return [makeIssue('RESOURCE_BUDGET', '本次可见文案超过 20 万字符的工作预算，请分为不同交付文档。')];
   let decodedPixels = 0; let sourceBytes = 0; let managedBytes = 0;
   for (const ref of visibleAssetRefs(project)) {
@@ -147,7 +150,7 @@ export async function prepareDisplay(project: ProjectRecord, store: StudioStore,
       const result = { uri: `data:image/${logo ? 'png' : 'jpeg'};base64,${rendered.data.toString('base64')}`, width: rendered.info.width, height: rendered.info.height };
       images.set(cacheKey, result);
       if (!dependencies.some(item => item.assetId === ref.assetId && item.versionId === ref.versionId)) dependencies.push({ ...ref, hash });
-      if (!logo && version.width < 800) issues.push(makeIssue('LOW_RESOLUTION', '一张对比图宽度不足 800 像素，请检查手机阅读时的细节。', 'warning', 'all', { blockId, comparisonId, assetId: asset!.id }));
+      if (!logo && version.width < 800) issues.push(makeIssue('LOW_RESOLUTION', '一张文档图片宽度不足 800 像素，请检查手机阅读时的细节。', 'warning', 'all', { blockId, comparisonId, assetId: asset!.id }));
       return result;
     } catch (error) {
       issues.push(makeIssue('ASSET_UNAVAILABLE', `图片无法读取：${error instanceof Error ? error.message.replace(/(?:[A-Z]:\\|\/)[^\s，。]+/gi, '管理文件') : '请重新导入'}`, 'error', 'all', { blockId, comparisonId, assetId: ref.assetId }));
@@ -161,13 +164,15 @@ export async function prepareDisplay(project: ProjectRecord, store: StudioStore,
     if (!block.title.trim()) issues.push(makeIssue('BLOCK_TITLE_EMPTY', '一个可见章节尚未填写标题，请补充标题或隐藏该章节。', 'error', 'all', { blockId: block.id }));
     if (block.type === 'intro') {
       const intro: Extract<DisplayBlock, { type: 'intro' }> = { type: 'intro', id: block.id, title: block.title, salutation: shown(document.fields.salutation), names: shown(document.fields.coupleNames), weddingDate: shown(document.fields.weddingDate), deliveryDate: document.deliveryDate.visible ? date : undefined, projectNo: shown(document.fields.projectNo) };
+      if (block.cover) intro.cover = { emphasis: block.cover.emphasis, headline: block.cover.headline, message: block.cover.message, image: await image(block.cover.image, block.id) };
       if (intro.names !== undefined && !intro.names) issues.push(makeIssue('NAMES_EMPTY', '请填写新人姓名，或明确关闭该字段的显示。', 'error', 'all', { blockId: block.id }));
       if (intro.weddingDate !== undefined && !intro.weddingDate) issues.push(makeIssue('WEDDING_DATE_EMPTY', '请填写婚礼日期，或关闭该字段的显示。', 'error', 'all', { blockId: block.id }));
       if (intro.deliveryDate !== undefined && !intro.deliveryDate) issues.push(makeIssue('DELIVERY_DATE_EMPTY', '请填写手动交付日期，或使用自动日期。', 'error', 'all', { blockId: block.id }));
       display.blocks.push(intro);
     } else if (block.type === 'text') {
       if (!block.content.trim()) issues.push(makeIssue('TEXT_EMPTY', `“${block.title || '文案章节'}”尚未填写内容，请补充或隐藏。`, 'error', 'all', { blockId: block.id }));
-      display.blocks.push({ type: 'text', id: block.id, title: block.title, content: block.content });
+      const details = block.details && block.details.placement !== 'hidden' ? { content: block.details.content, caption: block.details.caption, placement: block.details.placement, image: await image(block.details.image, block.id) } : undefined;
+      display.blocks.push({ type: 'text', id: block.id, title: block.title, content: block.content, details });
     } else if (block.type === 'signature') {
       display.blocks.push({ type: 'signature', id: block.id, title: block.title, photographer: shown(document.fields.photographerName), studio: shown(document.fields.studioName) });
     } else if (block.type === 'deliveries') {
@@ -203,7 +208,7 @@ export async function prepareDisplay(project: ProjectRecord, store: StudioStore,
         const after = await image(comparison.after, block.id, comparison.id);
         if (before && after && Math.abs(before.width / before.height - after.width / after.height) > 0.05) issues.push(makeIssue('ASPECT_RATIO_MISMATCH', `${comparison.title || `对比 ${index + 1}`}的前后图片比例不同，将保留完整画面，请确认是否可比。`, 'warning', 'all', { blockId: block.id, comparisonId: comparison.id }));
         if (comparison.before && comparison.after && comparison.before.versionId === comparison.after.versionId) issues.push(makeIssue('IDENTICAL_COMPARISON', `${comparison.title || `对比 ${index + 1}`}使用同一张图片作为 Before 和 After，请确认。`, 'warning', 'all', { blockId: block.id, comparisonId: comparison.id }));
-        comparisons.push({ id: comparison.id, title: comparison.title, number: String(index + 1).padStart(2, '0'), before, after });
+        comparisons.push({ id: comparison.id, title: comparison.title, description: comparison.description, number: String(index + 1).padStart(2, '0'), before, after });
       }
       if (!comparisons.length) issues.push(makeIssue('COMPARISONS_EMPTY', `“${block.title || '调色对比'}”尚无可见对比组，请导入图片、添加对比或隐藏该章节。`, 'error', 'all', { blockId: block.id }));
       display.blocks.push({ type: 'comparisons', id: block.id, title: block.title, layout, comparisons });
