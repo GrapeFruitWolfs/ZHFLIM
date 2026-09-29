@@ -93,6 +93,9 @@ import {
 } from "./importFiles";
 import { useProject, type SaveState } from "./useProject";
 import { QuickPreview } from "./QuickPreview";
+import { ProjectMenu } from "./ProjectMenu";
+import { ChapterList } from "./ChapterList";
+import { isFixedChapter, moveChapter, normalizeChapters } from "../shared/chapters";
 
 type Navigation = "projects" | "settings" | "project";
 type WorkTab = "content" | "assets" | "visual";
@@ -548,7 +551,12 @@ function ProjectList({
   notify: (message: string, error?: boolean) => void;
 }) {
   const [search, setSearch] = useState("");
-  const [archived, setArchived] = useState(false);
+  const [view, setView] = useState<"active" | "archived" | "trash">("active");
+  const archived = view === "archived";
+  const trash = view === "trash";
+  const [confirmation, setConfirmation] = useState<{ kind: "trash" | "purge"; project: ProjectSummary } | null>(null);
+  const [actionError, setActionError] = useState("");
+  const [deletedUndo, setDeletedUndo] = useState<Pick<ProjectRecord, "id" | "title" | "draftRevision"> | null>(null);
   const [creating, setCreating] = useState(false);
   const [title, setTitle] = useState("");
   const [presetId, setPresetId] = useState("");
@@ -556,7 +564,7 @@ function ProjectList({
   const [acting, setActing] = useState("");
   const filtered = projects.filter(
     (item) =>
-      item.archived === archived &&
+      (trash ? !!item.deletedAt : !item.deletedAt && item.archived === archived) &&
       `${item.title} ${item.projectNo} ${item.coupleNames}`
         .toLowerCase()
         .includes(search.toLowerCase()),
@@ -597,6 +605,38 @@ function ProjectList({
     } finally {
       setActing("");
     }
+  };
+  const restore = async (summary: Pick<ProjectRecord, "id" | "draftRevision">, undo = false) => {
+    setActing(summary.id);
+    try {
+      const record = await post<ProjectRecord>(`/api/projects/${summary.id}/restore`, { expectedRevision: summary.draftRevision });
+      if (deletedUndo?.id === summary.id) setDeletedUndo(null);
+      await refresh();
+      if (undo) setView(record.archived ? "archived" : "active");
+      notify(record.archived ? "项目已恢复到已归档" : "项目已恢复到我的项目");
+    } catch (error) { notify(errorMessage(error), true); await refresh().catch(() => undefined); }
+    finally { setActing(""); }
+  };
+  const confirmDelete = async () => {
+    if (!confirmation || acting) return;
+    const { project: summary, kind } = confirmation;
+    setActing(summary.id);
+    setActionError("");
+    try {
+      if (kind === "trash") {
+        const record = await post<ProjectRecord>(`/api/projects/${summary.id}/trash`, { expectedRevision: summary.draftRevision });
+        setDeletedUndo(record);
+      } else {
+        await api(`/api/projects/${summary.id}`, { method: "DELETE", body: JSON.stringify({ expectedRevision: summary.draftRevision }) });
+        if (deletedUndo?.id === summary.id) setDeletedUndo(null);
+      }
+      setConfirmation(null);
+      await refresh();
+      notify(kind === "trash" ? "项目已移入回收站" : "项目及本机托管文件已彻底删除");
+    } catch (error) {
+      setActionError(errorMessage(error) + (error instanceof ApiError && error.status === 409 ? " 请关闭弹窗，在更新后的列表中重新操作。" : ""));
+      await refresh().catch(() => undefined);
+    } finally { setActing(""); }
   };
   const duplicate = async (summary: ProjectSummary) => {
     if (
@@ -648,18 +688,21 @@ function ProjectList({
       <div className="collection-heading">
         <div className="collection-tabs">
           <button
-            className={!archived ? "selected" : ""}
-            onClick={() => setArchived(false)}
+            className={view === "active" ? "selected" : ""}
+            onClick={() => setView("active")}
           >
             我的项目{" "}
-            <span>{projects.filter((item) => !item.archived).length}</span>
+            <span>{projects.filter((item) => !item.archived && !item.deletedAt).length}</span>
           </button>
           <button
             className={archived ? "selected" : ""}
-            onClick={() => setArchived(true)}
+            onClick={() => setView("archived")}
           >
             已归档{" "}
-            <span>{projects.filter((item) => item.archived).length}</span>
+            <span>{projects.filter((item) => item.archived && !item.deletedAt).length}</span>
+          </button>
+          <button className={trash ? "selected" : ""} onClick={() => setView("trash")}>
+            回收站 <span>{projects.filter(item => item.deletedAt).length}</span>
           </button>
         </div>
         <label className="search">
@@ -677,6 +720,12 @@ function ProjectList({
           )}
         </label>
       </div>
+      {deletedUndo && <div className="project-undo" role="status">
+        <span>“{deletedUndo.title}”已移入回收站。</span>
+        <button className="text-button" disabled={!!acting} onClick={() => void restore(deletedUndo, true)}><Undo2 size={14} />撤销删除</button>
+        <IconButton label="关闭撤销提示" onClick={() => setDeletedUndo(null)}><X size={14} /></IconButton>
+      </div>}
+      {trash && <p className="trash-explanation">删除的项目在这里保留，直到你手动彻底删除。恢复后回到原来的项目分类。</p>}
       {!filtered.length ? (
         <div className="projects-empty">
           <div className="empty-editorial">
@@ -684,18 +733,18 @@ function ProjectList({
             <h2>
               {search
                 ? "还没有找到这份故事。"
-                : archived
+                : trash ? "回收站是空的。" : archived
                   ? "这里保存已完成的故事。"
                   : "第一份交付，\n从这里开始。"}
             </h2>
             <p>
               {search
                 ? "试试另一个姓名，或项目编号。"
-                : archived
+                : trash ? "移入回收站的项目可以恢复，也可以手动彻底删除。" : archived
                   ? "归档后的项目仍可重新打开、编辑与导出。"
                   : "选择交付内容，导入项目资料。\n剩下的整理与排版，交给工作台。"}
             </p>
-            {!search && !archived && (
+            {!search && view === "active" && (
               <button
                 className="button button-outline"
                 onClick={() => setCreating(true)}
@@ -730,6 +779,7 @@ function ProjectList({
             <article className="project-card" key={item.id}>
               <button
                 className={`project-cover ${item.templateId}`}
+                disabled={trash || acting === item.id}
                 onClick={() => void onOpen(item.id)}
               >
                 <span className="cover-top">
@@ -749,42 +799,30 @@ function ProjectList({
               <div className="project-card-info">
                 <button
                   className="card-title"
+                  disabled={trash || acting === item.id}
                   onClick={() => void onOpen(item.id)}
                 >
                   {item.title || "未命名项目"}
                 </button>
                 <p>
-                  {item.comparisons} 组对比<span>·</span>
-                  {dateLabel(item.updatedAt)} 更新
+                  {item.purgePending ? "清理未完成 · 请重试彻底删除" : <>{item.comparisons} 组对比<span>·</span>
+                  {dateLabel(item.deletedAt || item.updatedAt)} {trash ? "删除" : "更新"}</>}
                 </p>
                 <div className="card-actions">
+                  {trash ? <>
+                    <button className="text-button" disabled={!!acting || item.purgePending} onClick={() => void restore(item)}><Undo2 size={14} />恢复项目</button>
+                    <button className="text-button danger-text" disabled={!!acting} onClick={() => { setActionError(""); setConfirmation({ kind: "purge", project: item }); }}><Trash2 size={14} />{item.purgePending ? "重试彻底删除" : "彻底删除"}</button>
+                  </> : <>
                   <button
                     className="text-button"
+                    disabled={!!acting}
                     onClick={() => void onOpen(item.id)}
                   >
                     继续制作
                     <ArrowRight size={14} />
                   </button>
-                  <span>
-                    <IconButton
-                      label="复制为另一场婚礼"
-                      disabled={acting === item.id}
-                      onClick={() => void duplicate(item)}
-                    >
-                      <Copy size={15} />
-                    </IconButton>
-                    <IconButton
-                      label={item.archived ? "恢复项目" : "归档项目"}
-                      disabled={acting === item.id}
-                      onClick={() => void archive(item)}
-                    >
-                      {item.archived ? (
-                        <Undo2 size={15} />
-                      ) : (
-                        <Archive size={15} />
-                      )}
-                    </IconButton>
-                  </span>
+                  <ProjectMenu project={item} disabled={!!acting} onDuplicate={() => void duplicate(item)} onArchive={() => void archive(item)} onDelete={() => { setActionError(""); setConfirmation({ kind: "trash", project: item }); }} />
+                  </>}
                 </div>
               </div>
             </article>
@@ -795,6 +833,17 @@ function ProjectList({
         <span>CRAFTED FOR THE WAY YOU CREATE.</span>
         <span>项目资料保存在本机</span>
       </footer>
+      {confirmation && <Modal title={confirmation.kind === "trash" ? "移入回收站" : "彻底删除项目"} onClose={() => { if (!acting) setConfirmation(null); }}>
+        <p className="delete-project-name">{confirmation.project.title}</p>
+        <p className="delete-explanation">{confirmation.kind === "trash"
+          ? "项目将移入回收站，资料继续保留，你可以随时恢复。"
+          : "此操作无法撤销。将清除该项目资料、本机托管的图片副本、预览和导出记录及文件。原始素材文件夹、网盘文件和已另存的交付文件不会被删除。"}</p>
+        {actionError && <p className="inline-notice danger-text" role="alert">{actionError}</p>}
+        <div className="modal-actions">
+          <button className="button button-ghost" disabled={!!acting} onClick={() => setConfirmation(null)}>取消</button>
+          <button className="button button-danger" disabled={!!acting} onClick={() => void confirmDelete()}>{acting ? <LoaderCircle size={16} className="spin" /> : <Trash2 size={16} />}{acting ? "正在处理…" : confirmation.kind === "trash" ? "移入回收站" : "彻底删除"}</button>
+        </div>
+      </Modal>}
       {creating && (
         <Modal
           title="开始一份新的交付"
@@ -1113,7 +1162,7 @@ function Workbench({
       }),
     );
   };
-  const sortedBlocks = sorted(project.document.blocks);
+  const sortedBlocks = normalizeChapters(project.document.blocks);
   const currentBlock =
     sortedBlocks.find((block) => block.id === selectedBlock) || sortedBlocks[0];
   const locked = Boolean(busy);
@@ -1123,7 +1172,10 @@ function Workbench({
     keepUndo.current = false;
     setCandidate(null);
     setWarningsAccepted(false);
-    mutate(callback);
+    mutate(draft => {
+      callback(draft);
+      draft.document.blocks = normalizeChapters(draft.document.blocks);
+    });
   };
   useEffect(() => {
     leaveGuard.current = async () => {
@@ -1186,6 +1238,13 @@ function Workbench({
       controller.abort();
     };
   }, [project.id, exportOpen]);
+
+  const reorderChapter = (id: string, targetIndex: number) => {
+    const next = moveChapter(project.document.blocks, id, targetIndex);
+    if (next.every((block, index) => block.id === sortedBlocks[index]?.id)) return;
+    rememberUndo();
+    edit(draft => { draft.document.blocks = next; });
+  };
 
   const updateBlock = (block: DocumentBlock) =>
     edit((draft) => {
@@ -1739,26 +1798,10 @@ function Workbench({
         {tab === "content" && (
           <aside className="block-nav">
             <p className="eyebrow">DOCUMENT CHAPTERS</p>
-            {sortedBlocks.map((block, index) => (
-              <div
-                className={`block-nav-item ${currentBlock?.id === block.id ? "active" : ""} ${block.visible ? "" : "is-hidden"}`}
-                key={block.id}
-              >
-                <button onClick={() => setSelectedBlock(block.id)}>
-                  <span>{String(index + 1).padStart(2, "0")}</span>
-                  {block.title || "未命名章节"}
-                </button>
-                <IconButton
-                  label={block.visible ? "隐藏章节" : "显示章节"}
-                  disabled={locked}
-                  onClick={() =>
-                    updateBlock({ ...block, visible: !block.visible })
-                  }
-                >
-                  {block.visible ? <Eye size={13} /> : <EyeOff size={13} />}
-                </IconButton>
-              </div>
-            ))}
+            <ChapterList blocks={sortedBlocks} selected={currentBlock?.id} disabled={locked}
+              onSelect={setSelectedBlock}
+              onVisibility={block => updateBlock({ ...block, visible: !block.visible })}
+              onMove={reorderChapter} />
             <label className="add-chapter">
               <Plus size={14} />
               <select
@@ -1819,41 +1862,19 @@ function Workbench({
                     <h2>{currentBlock.title}</h2>
                   </div>
                   <div className="inline-actions">
-                    <IconButton
-                      label="章节上移"
-                      disabled={sortedBlocks.indexOf(currentBlock) === 0}
-                      onClick={() =>
-                        edit((draft) => {
-                          draft.document.blocks = reorder(
-                            draft.document.blocks,
-                            sortedBlocks.indexOf(currentBlock),
-                            -1,
-                          );
-                        })
-                      }
-                    >
+                    <IconButton label="章节上移"
+                      disabled={isFixedChapter(currentBlock) || !sortedBlocks[sortedBlocks.indexOf(currentBlock) - 1] || isFixedChapter(sortedBlocks[sortedBlocks.indexOf(currentBlock) - 1])}
+                      onClick={() => reorderChapter(currentBlock.id, sortedBlocks.indexOf(currentBlock) - 1)}>
                       <ArrowUp size={15} />
                     </IconButton>
-                    <IconButton
-                      label="章节下移"
-                      disabled={
-                        sortedBlocks.indexOf(currentBlock) ===
-                        sortedBlocks.length - 1
-                      }
-                      onClick={() =>
-                        edit((draft) => {
-                          draft.document.blocks = reorder(
-                            draft.document.blocks,
-                            sortedBlocks.indexOf(currentBlock),
-                            1,
-                          );
-                        })
-                      }
-                    >
+                    <IconButton label="章节下移"
+                      disabled={isFixedChapter(currentBlock) || !sortedBlocks[sortedBlocks.indexOf(currentBlock) + 1] || isFixedChapter(sortedBlocks[sortedBlocks.indexOf(currentBlock) + 1])}
+                      onClick={() => reorderChapter(currentBlock.id, sortedBlocks.indexOf(currentBlock) + 1)}>
                       <ArrowDown size={15} />
                     </IconButton>
                     <IconButton
                       label="删除章节"
+                      disabled={isFixedChapter(currentBlock)}
                       onClick={() => {
                         if (
                           window.confirm(

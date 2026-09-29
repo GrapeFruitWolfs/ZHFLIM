@@ -62,13 +62,14 @@ export interface ImportReport {
 export interface ProjectRecord {
   schemaVersion: 1; id: string; tenantId: string; clientId: string;
   title: string; projectNo: string; internalNotes: string;
-  draftRevision: number; archived: boolean; createdAt: string; updatedAt: string;
+  draftRevision: number; archived: boolean; deletedAt?: string; createdAt: string; updatedAt: string;
   document: DeliveryDocument; assets: Asset[]; importRoots: ImportRoot[];
   excludedSourceKeys: string[]; importReports: ImportReport[];
 }
 export interface ProjectSummary {
   id: string; title: string; projectNo: string; coupleNames: string; weddingDate: string;
   templateId: TemplateId; comparisons: number; updatedAt: string; archived: boolean;
+  draftRevision: number; deletedAt?: string; purgePending?: boolean;
 }
 export interface StudioSettings {
   tenantId: string; studioName: string; photographerName: string;

@@ -14,6 +14,8 @@ import { preserveManualDecisions } from '../domain/recognition.js';
 import { normalizeRelativePath, parseObservations, parseSettings, recognitionRuleSchema, validateProject } from '../domain/validation.js';
 import { SqliteStudioStore } from './store.js';
 import { registerSecurity } from './security.js';
+import { registerProjectLifecycle } from './project-lifecycle.js';
+import { isFixedChapter } from '../shared/chapters.js';
 import { acceptAssetVersion, beginImport, finalizeImport, importImage, MAX_IMAGE_BYTES } from './imports.js';
 import type { ServerConfig } from './contracts.js';
 import packageInfo from '../../package.json' with { type: 'json' };
@@ -37,6 +39,7 @@ export async function buildApp(options: Partial<ServerConfig> = {}): Promise<Fas
     reply.status(500).send({ code: 'INTERNAL_ERROR', message: '操作未完成，已保存的资料不受影响。请重试或查看本机日志。' });
   });
   const issueSession = registerSecurity(app, config);
+  registerProjectLifecycle(app, store);
   await app.register(multipart, { limits: { fileSize: MAX_IMAGE_BYTES, files: 1, fields: 4, fieldSize: 4000, parts: 5 } });
   app.get('/api/health', async () => ({ app: 'wedding-delivery-studio', version: packageInfo.version }));
   app.get('/api/session', async (request, reply) => ({ token: issueSession(request, reply), settings: store.getSettings() }));
@@ -55,6 +58,8 @@ export async function buildApp(options: Partial<ServerConfig> = {}): Promise<Fas
     const previous = store.getProject(request.params.id);
     const project = validateProject(input.project, store.getSettings().tenantId);
     const expectedRevision = expectedRevisionSchema.parse(input.expectedRevision);
+    if (project.deletedAt !== previous.deletedAt) throw new StudioError('MANAGED_LIFECYCLE', '请使用项目删除或恢复操作。', 409);
+    if (previous.document.blocks.filter(isFixedChapter).some(block => !project.document.blocks.some(next => next.id === block.id && next.type === block.type))) throw new StudioError('FIXED_CHAPTER', '序言和摄影师署名是固定章节，可以编辑或隐藏，不能删除。', 409);
     if (project.id !== previous.id || project.document.id !== previous.document.id || project.clientId !== previous.clientId || project.createdAt !== previous.createdAt) throw new StudioError('IMMUTABLE_IDENTITY', '项目身份和创建记录不可修改。');
     if (!isDeepStrictEqual(project.assets, previous.assets) || !isDeepStrictEqual(project.importRoots, previous.importRoots) || !isDeepStrictEqual(project.importReports, previous.importReports)) throw new StudioError('MANAGED_METADATA', '素材与导入记录由服务管理，请重新载入项目后保存。', 409);
     preserveManualDecisions(previous, project);

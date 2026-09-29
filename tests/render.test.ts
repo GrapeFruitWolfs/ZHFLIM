@@ -193,7 +193,13 @@ test('personalized covers and production appendices obey visibility, glyph cover
   prepared = await prepareDisplay(store.current, store, '2026-09-28');
   assert.equal(prepared.assets.length, 2);
   html = renderHtml(prepared.display, 'pdf', { css: '', hashes: {}, issues: [] });
-  assert.ok(html.indexOf('VISIBLE_DETAIL') > html.indexOf('class="unit signature"'));
+  for (const templateId of TEMPLATE_IDS) {
+    for (const target of ['pdf', 'image'] as const) {
+      const output = renderHtml({ ...prepared.display, templateId }, target, { css: '', hashes: {}, issues: [] });
+      assert.ok(output.indexOf('VISIBLE_SUMMARY') < output.indexOf('VISIBLE_DETAIL'));
+      assert.ok(output.indexOf('VISIBLE_DETAIL') < output.indexOf('class="unit signature"'), `${templateId}/${target}: signature must follow appendix`);
+    }
+  }
   assert.ok(html.includes('data-page-before="true"'));
   await writeFile(store.paths.get('version-1')!.path, 'corrupted');
   const broken = await prepareDisplay(store.current, store, '2026-09-28');

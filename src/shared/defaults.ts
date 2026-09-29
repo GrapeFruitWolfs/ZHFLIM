@@ -1,4 +1,5 @@
 import { newId, type Comparison, type CoverSettings, type ProductionDetails, type DeliveryItem, type DocumentBlock, type Preset, type ProjectRecord, type StudioSettings, type TextBlock } from './model.js';
+import { normalizeChapters, ensureChapterAnchors } from './chapters.js';
 
 export const createCover = (): CoverSettings => ({ emphasis: 'names', headline: '这一天，值得一次次重温。', message: '', image: null });
 export const createProductionDetails = (): ProductionDetails => ({ content: '', image: null, caption: '', placement: 'hidden' });
@@ -40,7 +41,7 @@ export const BUILTIN_PRESETS: Preset[] = [
 ];
 
 export function cloneBlocks(blocks: DocumentBlock[], stripProjectData = false): DocumentBlock[] {
-  return structuredClone(blocks).map((block, order) => {
+  return normalizeChapters(structuredClone(blocks)).map((block, order) => {
     block.id = newId(); block.order = order;
     if (stripProjectData && block.type === 'intro' && block.cover) block.cover = { ...block.cover, image: null, headline: '', message: '' };
     if (stripProjectData && block.type === 'text' && block.details) block.details = { ...block.details, image: null, caption: '' };
@@ -51,7 +52,7 @@ export function cloneBlocks(blocks: DocumentBlock[], stripProjectData = false): 
 }
 export function applyPreset(project: ProjectRecord, preset: Preset): ProjectRecord {
   const next = structuredClone(project);
-  next.document.blocks = cloneBlocks(preset.blocks, true);
+  next.document.blocks = ensureChapterAnchors(cloneBlocks(preset.blocks, true), next.document.id);
   next.document.templateId = preset.templateId;
   next.document.comparisonLayout = preset.comparisonLayout;
   return next;
@@ -72,7 +73,7 @@ export function createProject(options: { title: string; presetId?: string; setti
       deliveryDate: { mode: 'auto', manualDate: '', visible: true },
       brand: { tagline: options.settings.tagline, accent: options.settings.accent, logo: null },
       templateId: preset.templateId, templateVersion: 1, comparisonLayout: preset.comparisonLayout,
-      blocks: cloneBlocks(preset.blocks, true),
+      blocks: ensureChapterAnchors(cloneBlocks(preset.blocks, true), id),
       output: { mode: 'both', imageWidth: 1080, segmentHeight: 12000, allowImageSegments: false, allowComparisonPageBreak: false }
     },
     assets: [], importRoots: [], excludedSourceKeys: [], importReports: []

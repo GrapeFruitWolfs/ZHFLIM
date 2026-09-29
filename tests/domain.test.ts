@@ -80,12 +80,12 @@ test('opening a future SQLite schema refuses downgrade without changing its data
   t.after(async () => { await rm(directory, { recursive: true, force: true }); });
   const filename = join(directory, 'workspace.sqlite');
   const future = new DatabaseSync(filename);
-  future.exec("PRAGMA user_version=3; CREATE TABLE future_marker(value TEXT); INSERT INTO future_marker VALUES('preserve-me');");
+  future.exec("PRAGMA user_version=4; CREATE TABLE future_marker(value TEXT); INSERT INTO future_marker VALUES('preserve-me');");
   future.close();
   assert.throws(() => new SqliteStudioStore(directory), /较新版本/);
   const reopened = new DatabaseSync(filename);
   try {
-    assert.equal(reopened.prepare('PRAGMA user_version').get()!.user_version, 3);
+    assert.equal(reopened.prepare('PRAGMA user_version').get()!.user_version, 4);
     assert.equal(reopened.prepare('SELECT value FROM future_marker').get()!.value, 'preserve-me');
     assert.equal(reopened.prepare("SELECT count(*) AS count FROM sqlite_master WHERE name='projects'").get()!.count, 0);
   } finally { reopened.close(); }
@@ -104,7 +104,7 @@ test('opening a version-one workspace keeps projects and marks the new document 
   try { assert.deepEqual(upgraded.getProject(project.id), project); }
   finally { upgraded.close(); }
   const verified = new DatabaseSync(join(directory, 'workspace.sqlite'));
-  try { assert.equal(verified.prepare('PRAGMA user_version').get()!.user_version, 2); }
+  try { assert.equal(verified.prepare('PRAGMA user_version').get()!.user_version, 3); }
   finally { verified.close(); }
 });
 

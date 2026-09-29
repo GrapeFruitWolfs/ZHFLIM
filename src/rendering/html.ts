@@ -114,6 +114,7 @@ export function renderHtml(display: DisplayDocument, target: OutputTarget, fonts
   const title = display.blocks.find(block => block.type === 'intro');
   const safeTitle = title?.type === 'intro' && title.names ? title.names : 'Wedding Collection';
   const body: string[] = [];
+  const signatures: string[] = [];
   const appendix: Extract<DisplayBlock, { type: 'text' }>[] = [];
   const renderDetails = (block: Extract<DisplayBlock, { type: 'text' }>, inAppendix = false): string[] => {
     const details = block.details;
@@ -161,7 +162,7 @@ export function renderHtml(display: DisplayDocument, target: OutputTarget, fonts
         for (const chunk of textChunks(comparison.description ?? '', 180)) body.push(unit(`<p class="comparison-description">${e(chunk)}</p>`, '', `data-block="${e(block.id)}"`));
       }
     } else if (block.type === 'signature') {
-      body.push(signature(block, template.id));
+      signatures.push(signature(block, template.id));
     }
   }
   const brand = display.logo ? `<img class="brand-logo" src="${display.logo.uri}" alt="工作室标志" />` : `<span class="brand-name">${e(display.studio ?? '')}</span>`;
@@ -170,5 +171,5 @@ export function renderHtml(display: DisplayDocument, target: OutputTarget, fonts
   const closing = display.tagline ? unit(e(display.tagline), 'closing') : '';
   const appendixUnits = appendix.flatMap(block => renderDetails(block, true));
   const appendixHtml = appendixUnits.length ? unit('<h2 class="appendix-title">制作附录</h2><p class="appendix-caption">这份影像背后的技术细节与制作记录。</p>', 'appendix-start', `data-keep-next="true" ${target === 'pdf' ? 'data-page-before="true"' : ''}`) + appendixUnits.join('\n') : '';
-  return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=432"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; font-src data: 'self'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"><title>${e(safeTitle)}</title><style>${fonts.css}\n:root{--background:${template.background};--foreground:${template.foreground};--muted:${template.muted};--line:${template.line};--panel:${template.panel};--accent:${display.accent || template.accent}}${sharedCss}\n${template.css}\n${storyCss}</style></head><body data-template="${template.id}" data-target="${target}"><main class="render-root"><div class="flow"><header class="masthead">${masthead}</header><div class="units">${body.join('\n')}${closing}${appendixHtml}</div></div></main></body></html>`;
+  return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=432"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; font-src data: 'self'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"><title>${e(safeTitle)}</title><style>${fonts.css}\n:root{--background:${template.background};--foreground:${template.foreground};--muted:${template.muted};--line:${template.line};--panel:${template.panel};--accent:${display.accent || template.accent}}${sharedCss}\n${template.css}\n${storyCss}</style></head><body data-template="${template.id}" data-target="${target}"><main class="render-root"><div class="flow"><header class="masthead">${masthead}</header><div class="units">${body.join('\n')}${appendixHtml}${signatures.join('\n')}${closing}</div></div></main></body></html>`;
 }

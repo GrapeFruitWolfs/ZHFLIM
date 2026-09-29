@@ -6,8 +6,9 @@ import QRCode from 'qrcode';
 import type { AssetRef, ComparisonLayout, DeliveryDocument, Issue, ProjectRecord, StudioSettings, TemplateId } from '../shared/model.js';
 import type { StudioStore } from '../server/contracts.js';
 import { TEMPLATE_IDS } from '../shared/templates.js';
+import { normalizeChapters } from '../shared/chapters.js';
 
-export const RENDERER_VERSION = 'studio-renderer-4';
+export const RENDERER_VERSION = 'studio-renderer-5';
 export const RENDER_BUDGET = { comparisons: 100, decodedPixels: 120_000_000, sourceBytes: 512 * 1024 * 1024, managedBytes: 256 * 1024 * 1024, visibleCharacters: 200_000, htmlBytes: 96 * 1024 * 1024 };
 export const digest = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
 export const escapeHtml = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]!);
@@ -160,7 +161,7 @@ export async function prepareDisplay(project: ProjectRecord, store: StudioStore,
   }
 
   if (document.brand.logo) display.logo = await image(document.brand.logo, undefined, undefined, true);
-  for (const block of ordered(document.blocks.filter(item => item.visible))) {
+  for (const block of normalizeChapters(document.blocks).filter(item => item.visible)) {
     if (!block.title.trim()) issues.push(makeIssue('BLOCK_TITLE_EMPTY', '一个可见章节尚未填写标题，请补充标题或隐藏该章节。', 'error', 'all', { blockId: block.id }));
     if (block.type === 'intro') {
       const intro: Extract<DisplayBlock, { type: 'intro' }> = { type: 'intro', id: block.id, title: block.title, salutation: shown(document.fields.salutation), names: shown(document.fields.coupleNames), weddingDate: shown(document.fields.weddingDate), deliveryDate: document.deliveryDate.visible ? date : undefined, projectNo: shown(document.fields.projectNo) };

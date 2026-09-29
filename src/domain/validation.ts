@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { ImportObservation, ProjectRecord, StudioSettings } from '../shared/model.js';
 import { TEMPLATE_IDS } from '../shared/templates.js';
 import { StudioError } from './errors.js';
+import { normalizeChapters } from '../shared/chapters.js';
 
 const id = z.string().min(1).max(128).regex(/^[a-zA-Z0-9_-]+$/);
 const text = z.string().max(40000);
@@ -29,7 +30,7 @@ const root = z.object({ id, label: short, rule: z.enum(['after-first', 'before-f
 const report = z.object({ id, rootId: id, createdAt: z.string().datetime(), scanned: order, images: order, videos: order, audio: order, other: order, imported: order, reused: order, paired: order, incomplete: order, issues: z.array(z.object({ code: short, message: short, paths: z.array(short).max(5000), sourceKey: z.string().max(3000).optional() }).strict()).max(20000), cancelled: z.boolean() }).strict();
 export const projectSchema = z.object({
   schemaVersion: z.literal(1), id, tenantId: id, clientId: id, title: z.string().trim().min(1).max(200), projectNo: short, internalNotes: text,
-  draftRevision: z.number().int().nonnegative(), archived: z.boolean(), createdAt: z.string().datetime(), updatedAt: z.string().datetime(),
+  draftRevision: z.number().int().nonnegative(), archived: z.boolean(), deletedAt: z.string().datetime().optional(), createdAt: z.string().datetime(), updatedAt: z.string().datetime(),
   document: z.object({ id,
     fields: z.object({ salutation: visibleText, coupleNames: visibleText, weddingDate: z.object({ value: date, visible: z.boolean() }).strict(), studioName: visibleText, photographerName: visibleText, projectNo: visibleText }).strict(),
     deliveryDate: z.object({ mode: z.enum(['auto', 'manual']), manualDate: date, visible: z.boolean() }).strict(),
@@ -80,5 +81,6 @@ export function validateProject(value: unknown, tenantId: string): ProjectRecord
     if (block.type === 'comparisons') block.comparisons.forEach(item => { take(item.id); checkRef(item.before); checkRef(item.after); });
   }
   for (const report of project.importReports) if (!roots.has(report.rootId)) throw new StudioError('IMPORT_ROOT', '导入报告来源不存在。');
+  project.document.blocks = normalizeChapters(project.document.blocks);
   return project;
 }
