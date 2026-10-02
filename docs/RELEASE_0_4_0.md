@@ -28,7 +28,7 @@
 
 ## Windows 精简版
 
-- `npm run package:windows:lite` 生成 `WeddingDeliveryStudio-<版本>-win-x64-lite-<时间>.zip`，不含 Chromium，体积约小 170MiB。
+- `npm run package:windows:lite` 生成 `WeddingDeliveryStudio-<版本>-win-x64-lite-<时间>.zip`，不含 Chromium，约 92MiB（完整版约 288MiB）。
 - 导出浏览器查找顺序：`WDS_CHROMIUM_PATH` → 本机 Microsoft Edge → Google Chrome。启动窗口会显示所用浏览器；都找不到时仍可编辑项目，导出会提示安装或指定浏览器。
 - 导出效果取决于本机 Edge／Chrome 版本。浏览器自动更新后，旧导出的“重试”会要求新建版本，已生成文件不受影响。需要多台电脑输出完全一致时使用完整版。
 - `build-manifest.json` 记录 `variant: "lite"`，`chromiumVersion` 为 `null`。
@@ -49,3 +49,10 @@
 - `npm test`：71 项通过，0 失败、0 跳过。
 - `npm run test:e2e`：8 条浏览器流程全部通过，含实际 PDF／长图导出。
 - `npm run test:runtime`：本机启动器、重开与双格式导出通过。
+- `npm run package:windows` 与 `npm run package:windows:lite`：完成 Windows x64 便携包组装、原生依赖检查与 ZIP 校验；精简版确认不含浏览器。
+- Windows 真机执行：未执行，两个包的 `windowsExecutionVerified` 均为 `false`。
+
+| 包 | 文件 | 大小 | SHA-256 |
+|---|---|---|---|
+| 完整版（内置 Chromium） | `release/WeddingDeliveryStudio-0.4.0-win-x64-2026-10-02T00-17-44-084Z.zip` | 约 288.0 MiB | `7b202833f45de127565b0bc7f145f50afffd7aa77a6c750dffa8d2186cc7ff90` |
+| 精简版（使用本机 Edge／Chrome） | `release/WeddingDeliveryStudio-0.4.0-win-x64-lite-2026-10-02T00-17-12-414Z.zip` | 约 92.3 MiB | `c97d4d44ef5047fd4991b7b3f15261b308f805789bbefd753481db988bd539c8` |

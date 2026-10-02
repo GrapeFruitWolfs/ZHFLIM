@@ -23,7 +23,7 @@ Wedding Production OS 的第一阶段：帮助婚礼摄影师／摄像师组织�
 Windows x64：解压 `release/` 中的便携 ZIP，双击 `Start-Studio.cmd`，保持控制台窗口开启。便携包分两种：
 
 - **完整版** `…-win-x64-<时间>.zip`：内置导出用的 Chromium，不依赖本机浏览器，结果在不同电脑上最一致。
-- **精简版** `…-win-x64-lite-<时间>.zip`：不内置浏览器，体积约小 170MiB，用本机 Microsoft Edge（Windows 10/11 自带）导出，没有 Edge 时用 Google Chrome；也可用 `WDS_CHROMIUM_PATH` 指定。
+- **精简版** `…-win-x64-lite-<时间>.zip`：不内置浏览器，约 92MiB（完整版约 288MiB），用本机 Microsoft Edge（Windows 10/11 自带）导出，没有 Edge 时用 Google Chrome；也可用 `WDS_CHROMIUM_PATH` 指定。
 
 两种都不要求另外安装开发工具。该包是跨平台组装的未签名预览版，**仍需 Windows 真机验收**；建议先用脱敏副本试做。
 
