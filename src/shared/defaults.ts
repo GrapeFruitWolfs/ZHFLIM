@@ -39,9 +39,9 @@ function presetBlocks(withComparisons: boolean): DocumentBlock[] {
   return blocks.map((block, order) => ({ ...block, order }));
 }
 export const BUILTIN_PRESETS: Preset[] = [
-  { id: 'essential', version: 1, name: '简约交付', description: '影片清单、制作说明与保存建议，从一份清晰的交付开始。', builtin: true, blocks: presetBlocks(false), templateId: 'editorial', comparisonLayout: 'stacked' },
-  { id: 'signature', version: 1, name: '完整影像', description: '完整交付清单、后期制作说明与调色对比，内容仍可自由修改。', builtin: true, blocks: presetBlocks(true), templateId: 'editorial', comparisonLayout: 'stacked' },
-  { id: 'blank', version: 1, name: '自由创建', description: '从新人信息与署名开始，按本次需要添加内容。', builtin: true, blocks: presetBlocks(false).filter(block => block.type === 'intro' || block.type === 'signature').map((block, order) => ({ ...block, order })), templateId: 'editorial', comparisonLayout: 'stacked' }
+  { id: 'essential', version: 1, name: '简约交付', description: '影片清单、制作说明与保存建议，从一份清晰的交付开始。', builtin: true, blocks: presetBlocks(false), templateId: 'editorial', comparisonLayout: 'split' },
+  { id: 'signature', version: 1, name: '完整影像', description: '完整交付清单、后期制作说明与调色对比，内容仍可自由修改。', builtin: true, blocks: presetBlocks(true), templateId: 'editorial', comparisonLayout: 'split' },
+  { id: 'blank', version: 1, name: '自由创建', description: '从新人信息与署名开始，按本次需要添加内容。', builtin: true, blocks: presetBlocks(false).filter(block => block.type === 'intro' || block.type === 'signature').map((block, order) => ({ ...block, order })), templateId: 'editorial', comparisonLayout: 'split' }
 ];
 
 export function cloneBlocks(blocks: DocumentBlock[], stripProjectData = false): DocumentBlock[] {

@@ -37,8 +37,7 @@ export const storyCss = `
 .production-figure img{display:block;width:100%;height:auto;max-height:350px;object-fit:contain}
 .production-figure figcaption{font-size:13px;line-height:1.75;color:var(--muted);padding-top:10px;white-space:pre-wrap}
 .comparison-description{font-size:15px;line-height:1.8;color:var(--muted);margin:0;white-space:pre-wrap}
-.appendix-title{font-size:28px;line-height:1.4;margin:0 0 9px;font-weight:550}
-.appendix-caption{font-size:13px;color:var(--muted);margin:0}
+.appendix-caption{font-size:12.5px;line-height:1.7;color:var(--muted);margin:8px 0 0}
 .detail-unit{margin-bottom:14px}
 .compact-context{font-size:13px;line-height:1.6;font-weight:550;letter-spacing:0;margin-bottom:12px;color:var(--foreground)}
 `;

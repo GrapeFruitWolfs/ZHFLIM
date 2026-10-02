@@ -201,7 +201,9 @@ test('personalized covers and production appendices obey visibility, glyph cover
       assert.ok(output.indexOf('VISIBLE_DETAIL') < output.indexOf('class="unit signature"'), `${templateId}/${target}: signature must follow appendix`);
     }
   }
-  assert.ok(html.includes('data-page-before="true"'));
+  // The appendix is an ordinary chapter now: it continues on the current page and keeps its heading with the first entry.
+  assert.ok(html.includes('class="unit chapter appendix-start" data-keep-next="true"'));
+  assert.ok(!html.includes('data-page-before="true"'));
   await writeFile(store.paths.get('version-1')!.path, 'corrupted');
   const broken = await prepareDisplay(store.current, store, '2026-09-28');
   assert.ok(broken.issues.some(issue => issue.code === 'ASSET_UNAVAILABLE' && issue.blockId === note.id));

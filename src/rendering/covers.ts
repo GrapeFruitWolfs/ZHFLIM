@@ -157,7 +157,6 @@ export const coverCss: Record<TemplateId, string> = {
 .compact-chapter .chapter-heading{font-size:24px}
 .comparison-heading{font-family:var(--display);font-size:16px;font-weight:600}
 .signature-mark{font-family:var(--display);font-size:30px;font-weight:600;letter-spacing:.01em;line-height:1.55}
-.appendix-title{font-family:var(--display);font-weight:600}
 .signature-caption{color:var(--brand)}
 `,
   cinematic: `

@@ -181,17 +181,82 @@ export async function renderTarget(browser: Browser, html: string, target: Outpu
           const number = document.createElement('span'); number.className = 'page-number';
           footer.append(label, number); page.append(header, body, footer); pages.append(page); pageBodies.push(body); return body;
         };
+        const fitInto = (group: HTMLElement[], target: HTMLElement) => {
+          const boxes = group.filter(element => element.dataset.fit === 'true').flatMap(element => [...element.querySelectorAll<HTMLElement>('.fit-box')]);
+          if (!boxes.length) return false;
+          const original = boxes.map(box => box.getAttribute('style'));
+          const apply = (scale: number) => boxes.forEach((box, boxIndex) => {
+            box.setAttribute('style', original[boxIndex] ?? '');
+            const height = parseFloat(box.style.height); const width = box.style.width.endsWith('px') ? parseFloat(box.style.width) : NaN;
+            if (Number.isFinite(height)) box.style.height = `${Math.round(height * scale)}px`;
+            box.style.width = Number.isFinite(width) ? `${Math.round(width * scale)}px` : `calc(${box.style.width || '100%'} * ${scale})`;
+            box.style.marginLeft = 'auto'; box.style.marginRight = 'auto';
+          });
+          for (const scale of [0.94, 0.88, 0.81, 0.74]) {
+            apply(scale);
+            if (target.scrollHeight <= capacity + 1) return true;
+          }
+          boxes.forEach((box, boxIndex) => { if (original[boxIndex] === null) box.removeAttribute('style'); else box.setAttribute('style', original[boxIndex]!); });
+          return false;
+        };
+        const used = (target: HTMLElement) => {
+          const last = target.lastElementChild as HTMLElement | null;
+          if (!last) return 0;
+          return last.getBoundingClientRect().bottom - target.getBoundingClientRect().top + parseFloat(getComputedStyle(last).marginBottom || '0');
+        };
+        /** Splits a plain paragraph unit so its first sentences fill this page; returns the remainder unit. */
+        const splitText = (element: HTMLElement, target: HTMLElement): HTMLElement | undefined => {
+          const paragraph = element.firstElementChild as HTMLElement | null;
+          if (element.children.length !== 1 || !paragraph?.matches('p.body-copy:not(.delivery-copy), p.detail-copy, p.comparison-description') || element.classList.contains('ticket')) return;
+          const text = paragraph.textContent ?? '';
+          const cuts = [...text.matchAll(/[。！？；!?;]+[”」』）)]?|\n+/g)].map(match => match.index! + match[0].length).filter(cut => cut >= 16 && text.length - cut >= 8);
+          for (const cut of cuts.reverse()) {
+            paragraph.textContent = text.slice(0, cut).trimEnd();
+            if (target.scrollHeight <= capacity + 1) {
+              const rest = element.cloneNode(true) as HTMLElement;
+              (rest.firstElementChild as HTMLElement).textContent = text.slice(cut).replace(/^\n+/, '');
+              rest.dataset.keepNext = element.dataset.keepNext ?? 'false';
+              element.dataset.keepNext = 'false';
+              element.classList.add('continues');
+              return rest;
+            }
+          }
+          paragraph.textContent = text;
+          return undefined;
+        };
         let body = addPage();
         for (let index = 0; index < units.length; index++) {
           const unit = units[index];
           if (unit.dataset.pageBefore === 'true' && body.children.length) body = addPage();
           const group = [unit];
           while (units[index].dataset.keepNext === 'true' && units[index + 1] && units[index + 1].dataset.pageBefore !== 'true') group.push(units[++index]);
+          const room = capacity - used(body);
           body.append(...group);
+          // Rather than leave a large gap: shrink the group's pictures (never below 74%), or continue a
+          // long paragraph on the next page at a sentence boundary.
+          if (body.scrollHeight > capacity + 1 && room >= capacity * 0.25) {
+            if (fitInto(group, body)) continue;
+            const rest = splitText(group[group.length - 1], body);
+            if (rest) { units.splice(index + 1, 0, rest); continue; }
+          }
           if (body.scrollHeight > capacity + 1) {
             group.forEach(element => element.remove());
             if (body.children.length) body = addPage();
             body.append(...group);
+            if (body.scrollHeight > capacity + 1 && fitInto(group, body)) continue;
+            if (body.scrollHeight > capacity + 1 && group.length > 1) {
+              // Keeping units together is a preference: a group taller than a page flows unit by unit.
+              group.forEach(element => element.remove());
+              for (const element of group) {
+                body.append(element);
+                if (body.scrollHeight <= capacity + 1) continue;
+                element.remove();
+                if (body.children.length) body = addPage();
+                body.append(element);
+                if (body.scrollHeight > capacity + 1 && !fitInto([element], body)) return fail('PDF_UNIT_OVERFLOW', `第 ${pageBodies.length} 页有内容超过可读范围，请缩短标题、拆分长段落或更换图片布局。`, element);
+              }
+              continue;
+            }
             if (body.scrollHeight > capacity + 1) return fail('PDF_UNIT_OVERFLOW', `第 ${pageBodies.length} 页有内容超过可读范围，请缩短标题、拆分长段落或更换图片布局。`, unit);
           }
         }

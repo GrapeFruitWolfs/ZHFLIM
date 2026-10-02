@@ -9,7 +9,7 @@ import type { AssetRef, AssetVersion, IntroBlock, ProjectRecord, StillsBlock, St
 import type { StudioStore } from '../src/server/contracts.js';
 import { digest, prepareDisplay, visibleAssetRefs, type DisplayDocument, type DisplayImage } from '../src/rendering/display.js';
 import { renderHtml } from '../src/rendering/html.js';
-import { shareImage } from '../src/rendering/moments.js';
+import { shareCollage, shareImage } from '../src/rendering/moments.js';
 import { checkGlyphCoverage } from '../src/rendering/fonts.js';
 import { StudioError } from '../src/domain/errors.js';
 import { TEMPLATE_IDS } from '../src/shared/templates.js';
@@ -105,12 +105,13 @@ test('long image renders the teaser QR, stills strip, timeline rail and exactly 
   assert.ok(markup.indexOf('<section class="share-card') > markup.indexOf('</main>'), 'share card lives outside the reading flow');
 
   // 4 frames → hero + one pair + one wide single.
-  assert.equal(count(markup, /class="unit stills-unit stills-hero-unit"/g), 1);
-  assert.equal(count(markup, /<figure class="still-hero">/g), 1);
-  assert.equal(count(markup, /<div class="still-row">/g), 2);
-  assert.equal(count(markup, /<figure class="still-cell">/g), 2);
+  assert.equal(count(markup, /class="unit stills-unit stills-hero-unit[ "]/g), 1);
+  assert.equal(count(markup, /<figure class="still-hero /g), 1);
+  assert.equal(count(markup, /<div class="still-row[ "]/g), 2);
+  assert.equal(count(markup, /<figure class="still-cell" style="flex:/g), 2, 'paired frames share one height through their own aspect ratios');
   assert.equal(count(markup, /<figure class="still-cell wide">/g), 1);
-  const rows = markup.split('<div class="still-row">').slice(1).map(row => row.slice(0, row.indexOf('</div></div>') + 1));
+  assert.ok(!/aspect-ratio:3\/2/.test(markup), 'no fixed 3:2 frame: pictures keep their own ratio');
+  const rows = markup.split('<div class="still-row').slice(1).map(row => row.slice(0, row.indexOf('</div></div>') + 1));
   assert.equal(count(rows[0], /class="still-cell"/g), 2);
   assert.ok(rows[0].includes('base64,F2') && rows[0].includes('base64,F3'));
   assert.ok(rows[1].includes('still-cell wide') && rows[1].includes('base64,F4'));
@@ -125,7 +126,7 @@ test('long image renders the teaser QR, stills strip, timeline rail and exactly 
   assert.equal(count(markup, /tl-head/g), 2);
   assert.ok(markup.includes('LONG_NOTE_END'), 'long notes are never truncated');
   assert.ok(count(markup, /<p class="tl-note">/g) >= 2, 'a long note is split into continuation units');
-  assert.equal(count(markup, /class="tl-figure"/g), 1);
+  assert.equal(count(markup, /class="tl-figure[ "]/g), 1);
   const lastUnit = markup.slice(markup.indexOf('tl-last'));
   assert.ok(lastUnit.slice(0, lastUnit.indexOf('</div></div>')).includes('base64,TL'), 'the entry image is the final timeline unit');
 
@@ -184,6 +185,44 @@ test('shareImage prefers the cover, then the first still, then the first graded 
   assert.equal(shareImage(empty), undefined);
   const html = markupOf(renderHtml(empty, 'image', NO_FONTS));
   assert.ok(html.includes('sc-photo sc-photo-empty'), 'a card without any picture falls back to the template title');
+});
+
+test('share card composes a collage from visible, distinct, non-Before images only when the main picture is landscape', () => {
+  const base = momentsDisplay();
+  base.blocks.push({ type: 'comparisons', id: 'pairs', title: '画面', layout: 'stacked', comparisons: [{ id: 'p1', title: 'P', number: '01', before: still('BEFORE1'), after: still('AFTER1') }] });
+  const collage = shareCollage(base)!;
+  assert.equal(collage.length, 3);
+  assert.equal(collage[0].uri, shareImage(base)!.uri, 'the main picture is the share image');
+  assert.equal(new Set(collage.map(image => image.uri)).size, 3, 'no duplicates');
+  assert.ok(collage.every(image => !image.uri.includes('BEFORE')), 'never a Before image');
+  const visible = ['COVER', 'F1', 'F2', 'F3', 'F4', 'AFTER1'].map(tag => `data:image/jpeg;base64,${tag}`);
+  assert.ok(collage.every(image => visible.includes(image.uri)), 'only images already visible in the document');
+  const markup = markupOf(renderHtml(base, 'image', NO_FONTS));
+  const card = markup.slice(markup.indexOf('<section class="share-card'));
+  assert.ok(card.includes('data-layout="collage"'));
+  assert.equal(count(card, /class="sc-shot /g), 3);
+  assert.ok(!card.includes('cv-backdrop'), 'no blurred fill around the collage');
+  assert.ok([...card.matchAll(/style="width:(\d+)px/g)].every(match => Number(match[1]) <= 432), 'nothing wider than the card');
+
+  // The cover reused as a still is not counted twice; only one distinct extra → no collage.
+  const fewer = structuredClone(base);
+  fewer.blocks = fewer.blocks.filter(block => block.type !== 'comparisons');
+  const stills = fewer.blocks.find(block => block.type === 'stills');
+  if (stills?.type !== 'stills') throw new Error('fixture');
+  stills.frames = [{ id: 'c', caption: '', image: still('COVER') }, { id: 'x', caption: '', image: still('F1') }, { id: 'y', caption: '', image: still('F1') }];
+  assert.equal(shareCollage(fewer), undefined);
+
+  const none = structuredClone(fewer);
+  none.blocks = none.blocks.filter(block => block.type === 'intro');
+  assert.equal(shareCollage(none), undefined);
+  const single = markupOf(renderHtml(none, 'image', NO_FONTS));
+  assert.ok(single.includes('data-layout="single"') && count(single, /class="sc-shot /g) === 1);
+
+  const portrait = structuredClone(base);
+  const intro = portrait.blocks[0];
+  if (intro.type !== 'intro' || !intro.cover) throw new Error('fixture');
+  intro.cover.image = still('PORTRAIT', 900, 1350);
+  assert.equal(shareCollage(portrait), undefined, 'a portrait main picture keeps a single frame');
 });
 
 test('prepareDisplay reports missing, few and too many stills; visible frame images become dependencies', async t => {

@@ -8,12 +8,25 @@ import type { StudioStore } from '../server/contracts.js';
 import { TEMPLATE_IDS } from '../shared/templates.js';
 import { normalizeChapters } from '../shared/chapters.js';
 
-export const RENDERER_VERSION = 'studio-renderer-6';
+export const RENDERER_VERSION = 'studio-renderer-7';
 export const RENDER_BUDGET = { comparisons: 100, decodedPixels: 120_000_000, sourceBytes: 512 * 1024 * 1024, managedBytes: 256 * 1024 * 1024, visibleCharacters: 200_000, htmlBytes: 96 * 1024 * 1024 };
 export const digest = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
 export const escapeHtml = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]!);
 
-export interface DisplayImage { uri: string; width: number; height: number; backdrop?: string }
+/** `busy` is 0 (calm, simple) … 1 (crowded); used to pick closing pictures that can carry text. */
+export interface DisplayImage { uri: string; width: number; height: number; backdrop?: string; busy?: number }
+
+/** Mean local contrast of a small greyscale copy: crowds and confetti score high, portraits and skies low. */
+export async function busyness(bytes: Buffer): Promise<number> {
+  const { data, info } = await sharp(bytes).resize({ width: 96, height: 96, fit: 'inside' }).greyscale().raw().toBuffer({ resolveWithObject: true });
+  let total = 0; let count = 0;
+  for (let y = 0; y < info.height - 1; y++) for (let x = 0; x < info.width - 1; x++) {
+    const index = y * info.width + x;
+    total += Math.abs(data[index] - data[index + 1]) + Math.abs(data[index] - data[index + info.width]);
+    count += 2;
+  }
+  return count ? Math.min(1, total / count / 40) : 0;
+}
 
 /** Fractions of the oriented source trimmed from each edge. */
 export interface Bars { top: number; right: number; bottom: number; left: number }
@@ -64,7 +77,7 @@ export interface DisplayComparison { id: string; title: string; description?: st
 export interface DisplayDetails { content: string; image?: DisplayImage; caption: string; placement: 'inline' | 'appendix' }
 export type DisplayBlock =
   | { type: 'intro'; id: string; title: string; salutation?: string; names?: string; weddingDate?: string; deliveryDate?: string; projectNo?: string; cover?: { emphasis: 'names' | 'photo'; headline: string; message: string; image?: DisplayImage; teaser?: DisplayLink } }
-  | { type: 'text'; id: string; title: string; content: string; details?: DisplayDetails }
+  | { type: 'text'; id: string; title: string; content: string; details?: DisplayDetails; source?: string }
   | { type: 'deliveries'; id: string; title: string; items: { id: string; title: string; description: string; format: string; accessNote: string; links: DisplayLink[] }[] }
   | { type: 'comparisons'; id: string; title: string; layout: ComparisonLayout; comparisons: DisplayComparison[] }
   | { type: 'signature'; id: string; title: string; photographer?: string; studio?: string }
@@ -218,6 +231,7 @@ export async function prepareDisplay(project: ProjectRecord, store: StudioStore,
       pipeline = pipeline.toColourspace('srgb').resize({ width: logo ? 1000 : 2160, height: logo ? 1000 : 6400, fit: 'inside', withoutEnlargement: true });
       const rendered = await (logo ? pipeline.png() : pipeline.jpeg({ quality: 93, chromaSubsampling: '4:4:4' })).toBuffer({ resolveWithObject: true });
       const result: DisplayImage = { uri: `data:image/${logo ? 'png' : 'jpeg'};base64,${rendered.data.toString('base64')}`, width: rendered.info.width, height: rendered.info.height };
+      if (!logo) result.busy = await busyness(rendered.data);
       if (options.backdrop) {
         // A tiny blurred copy lets covers fill tall frames without cropping the photograph itself.
         const blurred = await sharp(rendered.data).resize({ width: 64, height: 64, fit: 'inside' }).blur(1.6).modulate({ saturation: 0.85 }).jpeg({ quality: 72 }).toBuffer();
@@ -262,7 +276,7 @@ export async function prepareDisplay(project: ProjectRecord, store: StudioStore,
     } else if (block.type === 'text') {
       if (!block.content.trim()) issues.push(makeIssue('TEXT_EMPTY', `“${block.title || '文案章节'}”尚未填写内容，请补充或隐藏。`, 'error', 'all', { blockId: block.id }));
       const details = block.details && block.details.placement !== 'hidden' ? { content: block.details.content, caption: block.details.caption, placement: block.details.placement, image: await image(block.details.image, block.id, undefined, false, { crop: NO_BARS }) } : undefined;
-      display.blocks.push({ type: 'text', id: block.id, title: block.title, content: block.content, details });
+      display.blocks.push({ type: 'text', id: block.id, title: block.title, content: block.content, details, ...(block.sourceDefinitionId ? { source: block.sourceDefinitionId } : {}) });
     } else if (block.type === 'signature') {
       display.blocks.push({ type: 'signature', id: block.id, title: block.title, photographer: shown(document.fields.photographerName), studio: shown(document.fields.studioName) });
     } else if (block.type === 'deliveries') {
