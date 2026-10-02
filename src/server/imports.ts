@@ -2,7 +2,7 @@ import sharp, { type OutputInfo } from 'sharp';
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import { newId, type Asset, type AssetVersion, type ImportObservation, type ImportReport, type ProjectRecord, type RecognitionRule } from '../shared/model.js';
+import { newId, type Asset, type AssetRef, type AssetVersion, type ImportObservation, type ImportReport, type ProjectRecord, type RecognitionRule } from '../shared/model.js';
 import { normalizeRelativePath } from '../domain/validation.js';
 import { createImportReport, reconcileComparisons, reorientAutomaticComparisons, selectDocumentImages, supportedImage } from '../domain/recognition.js';
 import { StudioError } from '../domain/errors.js';
@@ -193,8 +193,15 @@ export function acceptAssetVersion(store: SqliteStudioStore, projectId: string, 
   const project = store.getProject(projectId);
   const asset = project.assets.find(item => item.id === assetId);
   if (!asset?.versions.some(item => item.id === versionId)) throw new StudioError('ASSET_VERSION', '图片版本不存在或不属于本项目。', 404);
-  for (const block of project.document.blocks) if (block.type === 'comparisons') for (const comparison of block.comparisons) {
-    for (const slot of ['before', 'after'] as const) if (comparison[slot]?.assetId === assetId) comparison[slot] = { assetId, versionId };
+  const accepted = <T extends { image: AssetRef | null }>(holder: T) => { if (holder.image?.assetId === assetId) holder.image = { assetId, versionId }; };
+  for (const block of project.document.blocks) {
+    if (block.type === 'comparisons') for (const comparison of block.comparisons) {
+      for (const slot of ['before', 'after'] as const) if (comparison[slot]?.assetId === assetId) comparison[slot] = { assetId, versionId };
+    }
+    if (block.type === 'stills') block.frames.forEach(accepted);
+    if (block.type === 'timeline') block.entries.forEach(accepted);
+    if (block.type === 'intro' && block.cover) accepted(block.cover);
+    if (block.type === 'text' && block.details) accepted(block.details);
   }
   if (project.document.brand.logo?.assetId === assetId) project.document.brand.logo = { assetId, versionId };
   return store.saveProject(project, expectedRevision);

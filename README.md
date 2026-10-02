@@ -6,7 +6,7 @@ Wedding Production OS 的第一阶段：帮助婚礼摄影师／摄像师组织�
 
 ## 当前状态
 
-当前为 **v0.3.0 本地可运行 MVP**：浏览器工作台 + 本机服务。支持项目管理、目录导入、调色对比、五套模板及真实 PDF／长图；新增个性化封面、制作详情／附录、对比说明与私人影像展册主设计。新增项目回收站、可恢复删除及章节拖拽排序，序言固定开头、署名固定结尾。详见 [v0.3.0 说明](docs/RELEASE_0_3_0.md)。
+当前为 **v0.4.0 本地可运行 MVP**：浏览器工作台 + 本机服务。支持项目管理、目录导入、调色对比、五套模板及真实 PDF／长图，以及个性化封面、制作详情／附录、项目回收站和章节拖拽排序。v0.4.0 重做五套模板的封面与视觉节奏，新增高光画面、当天时间线、封面预告二维码和 9:16 分享卡，并提供不内置浏览器的 Windows 精简版。详见 [v0.4.0 说明](docs/RELEASE_0_4_0.md)。
 
 用户已确认：
 
@@ -20,7 +20,12 @@ Wedding Production OS 的第一阶段：帮助婚礼摄影师／摄像师组织�
 
 ## 启动
 
-Windows x64：解压 `release/` 中的便携 ZIP，双击 `Start-Studio.cmd`，保持控制台窗口开启。运行时和导出所用 Chromium 随包提供，不要求另外安装开发工具。该包是跨平台组装的未签名预览版，**仍需 Windows 真机验收**；建议先用脱敏副本试做。
+Windows x64：解压 `release/` 中的便携 ZIP，双击 `Start-Studio.cmd`，保持控制台窗口开启。便携包分两种：
+
+- **完整版** `…-win-x64-<时间>.zip`：内置导出用的 Chromium，不依赖本机浏览器，结果在不同电脑上最一致。
+- **精简版** `…-win-x64-lite-<时间>.zip`：不内置浏览器，体积约小 170MiB，用本机 Microsoft Edge（Windows 10/11 自带）导出，没有 Edge 时用 Google Chrome；也可用 `WDS_CHROMIUM_PATH` 指定。
+
+两种都不要求另外安装开发工具。该包是跨平台组装的未签名预览版，**仍需 Windows 真机验收**；建议先用脱敏副本试做。
 
 开发环境需要 Node.js 24 或更高版本：
 
@@ -41,9 +46,10 @@ npm run build
 npm run test:e2e
 npm run review:visual
 npm run package:windows
+npm run package:windows:lite
 ```
 
-`package:windows` 下载官方 Node／Chrome for Testing，并安装 Windows x64 原生依赖，需联网。首次生成 PDF／长图也会启动随包浏览器，但不会从网络下载项目资源或字体。
+`package:windows` 下载官方 Node／Chrome for Testing，并安装 Windows x64 原生依赖，需联网；`package:windows:lite` 只下载 Node，不打包浏览器。首次生成 PDF／长图也会启动随包浏览器，但不会从网络下载项目资源或字体。
 
 `review:visual` 使用虚构资料和带边框的横／竖测试图，调用正式渲染器生成五套模板的 PDF、长图、封面对照图和可直接打开的 `index.html`，保存到独立的 `release/visual-review/<时间>/`。样张不读取现有项目，不含真实照片；它用于排版核查，不能替代真实照片与手机显示效果确认。
 

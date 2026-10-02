@@ -34,7 +34,10 @@ if (await health()) {
   if (!process.env.WDS_CHROMIUM_PATH && process.platform === 'win32' && existsSync(bundledChrome)) process.env.WDS_CHROMIUM_PATH = bundledChrome;
   const dataDir = process.env.WDS_DATA_DIR || (process.platform === 'win32' && appData ? join(appData, 'WeddingDeliveryStudio') : join(root, '.studio-data'));
   // Run the server in this process. Closing the Windows console must not orphan a child server.
-  const { buildApp } = await import(pathToFileURL(join(root, 'dist-server', 'index.js')).href);
+  const { buildApp, resolveChromiumPath } = await import(pathToFileURL(join(root, 'dist-server', 'index.js')).href);
+  const browser = resolveChromiumPath();
+  if (browser.source === 'system') console.log(`Export browser: ${browser.path}`);
+  if (browser.source === 'missing') console.warn('未找到 Microsoft Edge 或 Google Chrome：可以编辑项目，但生成 PDF／长图前请安装浏览器，或设置 WDS_CHROMIUM_PATH。');
   const app = await buildApp({ port, rootDir: root, dataDir });
   let closing = false;
   const close = () => {

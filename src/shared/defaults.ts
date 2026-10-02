@@ -1,7 +1,11 @@
-import { newId, type Comparison, type CoverSettings, type ProductionDetails, type DeliveryItem, type DocumentBlock, type Preset, type ProjectRecord, type StudioSettings, type TextBlock } from './model.js';
+import { newId, type Comparison, type CoverSettings, type ProductionDetails, type DeliveryItem, type DocumentBlock, type Preset, type ProjectRecord, type StillFrame, type StillsBlock, type StudioSettings, type TextBlock, type TimelineBlock, type TimelineEntry } from './model.js';
 import { normalizeChapters, ensureChapterAnchors } from './chapters.js';
 
 export const createCover = (): CoverSettings => ({ emphasis: 'names', headline: '这一天，值得一次次重温。', message: '', image: null });
+export const createStillFrame = (): StillFrame => ({ id: newId(), image: null, caption: '', order: 0, visible: true });
+export const createTimelineEntry = (time = '', title = ''): TimelineEntry => ({ id: newId(), time, title, note: '', image: null, order: 0, visible: true });
+export const createStillsBlock = (): StillsBlock => ({ id: newId(), type: 'stills', title: '那天的高光', visible: true, order: 0, frames: [0, 1, 2].map(order => ({ ...createStillFrame(), order })) });
+export const createTimelineBlock = (): TimelineBlock => ({ id: newId(), type: 'timeline', title: '这一天', visible: true, order: 0, entries: [['09:00', '清晨准备'], ['11:30', '迎亲'], ['18:00', '婚礼仪式']].map(([time, title], order) => ({ ...createTimelineEntry(time, title), order })) });
 export const createProductionDetails = (): ProductionDetails => ({ content: '', image: null, caption: '', placement: 'hidden' });
 
 export const CONTENT_LIBRARY = [
@@ -43,10 +47,15 @@ export const BUILTIN_PRESETS: Preset[] = [
 export function cloneBlocks(blocks: DocumentBlock[], stripProjectData = false): DocumentBlock[] {
   return normalizeChapters(structuredClone(blocks)).map((block, order) => {
     block.id = newId(); block.order = order;
-    if (stripProjectData && block.type === 'intro' && block.cover) block.cover = { ...block.cover, image: null, headline: '', message: '' };
+    if (stripProjectData && block.type === 'intro' && block.cover) {
+      const { teaser: _teaser, ...cover } = block.cover;
+      block.cover = { ...cover, image: null, headline: '', message: '' };
+    }
     if (stripProjectData && block.type === 'text' && block.details) block.details = { ...block.details, image: null, caption: '' };
     if (block.type === 'deliveries') block.items = block.items.map((item, index) => ({ ...item, id: newId(), order: index, ...(stripProjectData ? { downloadUrl: '', playbackUrl: '', accessNote: '' } : {}) }));
     if (block.type === 'comparisons') block.comparisons = stripProjectData ? [] : block.comparisons.map((item, index) => ({ ...item, id: newId(), order: index }));
+    if (block.type === 'stills') block.frames = [...block.frames].sort((a, b) => a.order - b.order).map((item, index) => ({ ...item, id: newId(), order: index, ...(stripProjectData ? { image: null, caption: '' } : {}) }));
+    if (block.type === 'timeline') block.entries = [...block.entries].sort((a, b) => a.order - b.order).map((item, index) => ({ ...item, id: newId(), order: index, ...(stripProjectData ? { note: '', image: null } : {}) }));
     return block;
   });
 }

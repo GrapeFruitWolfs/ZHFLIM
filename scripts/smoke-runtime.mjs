@@ -30,7 +30,9 @@ const delay = ms => new Promise(ok => setTimeout(ok, ms));
 
 async function start() {
   const env = { ...process.env, WDS_PORT: String(port), WDS_DATA_DIR: dataDir, WDS_NO_OPEN: '1' };
-  if (portable) env.WDS_CHROMIUM_PATH = join(root, 'chromium', 'chrome-win64', 'chrome.exe');
+  // The lite package has no bundled browser and must find the system Edge／Chrome by itself.
+  const bundled = join(root, 'chromium', 'chrome-win64', 'chrome.exe');
+  if (portable && existsSync(bundled)) env.WDS_CHROMIUM_PATH = bundled;
   child = spawn(runtime, [launcher, root], { cwd: temporary, env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
   child.on('error', error => { logs += error.message; });
   for (const stream of [child.stdout, child.stderr]) stream.on('data', data => { logs = (logs + data.toString()).slice(-24000); });

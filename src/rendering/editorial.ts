@@ -31,21 +31,6 @@ body{font-size:18.5px;line-height:1.75}
 `;
 
 export const storyCss = `
-.story-cover{position:relative;display:flex;flex-direction:column;gap:19px;padding:10px 0 23px;min-height:0}
-.story-kicker{font-size:11px;letter-spacing:.09em;color:var(--muted);margin:0 0 16px}
-.story-name{font-family:'Studio Sans',sans-serif;font-size:37px;font-weight:560;line-height:1.35;letter-spacing:-.025em;white-space:pre-line;margin:0}
-.story-headline{font-family:'Studio Sans',sans-serif;font-size:21px;line-height:1.5;font-weight:450;letter-spacing:-.015em;white-space:pre-wrap;margin:15px 0 0}
-.story-message{font-size:17px;line-height:1.8;margin:0;white-space:pre-wrap;color:var(--muted)}
-.story-photo{margin:0;background:var(--panel)}
-.story-photo img{display:block;width:100%;height:auto;max-height:255px;object-fit:contain}
-.story-cover .salutation{font-size:13px}.story-cover .date-label{font-size:10px;letter-spacing:.07em}
-.story-cover .date-value{font-family:'Studio Sans',sans-serif;font-size:14px}
-.story-cover .access-note{font-size:12px;margin-top:10px}
-.story-cover.photo-first .story-photo{order:-1}
-.story-cover.photo-first .story-photo img{max-height:315px}
-.story-cover.photo-first .story-name{font-size:31px}
-.story-cover.photo-first .story-headline{font-size:19px;margin-top:10px}
-.story-cover .date-line{padding-top:12px}
 .detail-heading{font-size:16px;font-weight:550;line-height:1.55;margin:0;color:var(--foreground)}
 .detail-copy{font-size:15px;line-height:1.8;white-space:pre-wrap;margin:0;color:var(--muted)}
 .production-figure{margin:0;border:1px solid var(--line);padding:10px;background:var(--panel)}

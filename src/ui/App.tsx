@@ -68,10 +68,12 @@ import type {
   ProjectRecord,
   ProjectSummary,
   RecognitionRule,
+  StillFrame,
   StudioSettings,
+  TimelineEntry,
   VisibleText,
 } from "../shared/model";
-import { newId } from "../shared/model";
+import { newId, STILLS_LIMITS, TIMELINE_MAX_ENTRIES } from "../shared/model";
 import { TEMPLATES, getTemplate, type TemplateId } from "../shared/templates";
 import {
   CONTENT_LIBRARY,
@@ -80,6 +82,10 @@ import {
   createTextBlock,
   createCover,
   createProductionDetails,
+  createStillFrame,
+  createStillsBlock,
+  createTimelineBlock,
+  createTimelineEntry,
 } from "../shared/defaults";
 import { api, ApiError, errorMessage, post, setSessionToken } from "./api";
 import {
@@ -1081,9 +1087,16 @@ function SettingsPage({
   );
 }
 
+/** Image slots that live inside the currently edited chapter (the chapter id is added by the workbench). */
+type BlockImagePick =
+  | { purpose: "cover" | "evidence" }
+  | { frameId: string }
+  | { entryId: string };
 type SlotTarget =
   | { blockId: string; comparisonId: string; side: "before" | "after" }
   | { blockId: string; purpose: "cover" | "evidence" }
+  | { blockId: string; frameId: string }
+  | { blockId: string; entryId: string }
   | "logo";
 
 function selectImage(project: ProjectRecord, target: SlotTarget, ref: AssetRef) {
@@ -1092,11 +1105,32 @@ function selectImage(project: ProjectRecord, target: SlotTarget, ref: AssetRef) 
   if ("purpose" in target) {
     if (target.purpose === "cover" && block?.type === "intro") block.cover = { ...createCover(), ...block.cover, image: ref };
     if (target.purpose === "evidence" && block?.type === "text") block.details = { ...createProductionDetails(), placement: "inline", ...block.details, image: ref };
+  } else if ("frameId" in target) {
+    const frame = block?.type === "stills" ? block.frames.find(item => item.id === target.frameId) : undefined;
+    if (frame) frame.image = ref;
+  } else if ("entryId" in target) {
+    const entry = block?.type === "timeline" ? block.entries.find(item => item.id === target.entryId) : undefined;
+    if (entry) entry.image = ref;
   } else if (block?.type === "comparisons") {
     const comparison = block.comparisons.find(item => item.id === target.comparisonId);
     if (comparison) { comparison[target.side] = ref; comparison.locked = true; }
   }
 }
+/** Image slots on cover, highlight stills and timeline entries (comparisons and logo are handled by the server). */
+function documentImageSlots(project: ProjectRecord) {
+  const slots: { ref: AssetRef | null; set: (ref: AssetRef) => void }[] = [];
+  for (const block of project.document.blocks) {
+    const cover = block.type === "intro" ? block.cover : undefined;
+    if (cover) slots.push({ ref: cover.image, set: (ref) => { cover.image = ref; } });
+    if (block.type === "stills")
+      for (const frame of block.frames) slots.push({ ref: frame.image, set: (ref) => { frame.image = ref; } });
+    if (block.type === "timeline")
+      for (const entry of block.entries) slots.push({ ref: entry.image, set: (ref) => { entry.image = ref; } });
+  }
+  return slots;
+}
+const staleRef = (ref: AssetRef | null, assetId: string, versionId: string) =>
+  ref?.assetId === assetId && ref.versionId !== versionId;
 function Workbench({
   initial,
   presets,
@@ -1294,6 +1328,8 @@ function Workbench({
           order: 0,
           items: [createDeliveryItem()],
         };
+      else if (choice === "stills") block = { ...createStillsBlock(), id };
+      else if (choice === "timeline") block = { ...createTimelineBlock(), id };
       else {
         const definition = CONTENT_LIBRARY.find((item) => item.id === choice);
         block = {
@@ -1813,6 +1849,8 @@ function Workbench({
                 <option value="">添加章节</option>
                 <option value="deliveries">交付清单</option>
                 <option value="comparisons">调色对比</option>
+                <option value="stills">高光画面</option>
+                <option value="timeline">当天时间线</option>
                 {CONTENT_LIBRARY.map((item) => (
                   <option key={item.id} value={item.id}>
                     {item.title}
@@ -1930,7 +1968,7 @@ function Workbench({
                   update={updateBlock}
                   onAssets={() => setTab("assets")}
                   onPickLogo={() => setPicker("logo")}
-                  onPickImage={(purpose) => setPicker({ blockId: currentBlock.id, purpose })}
+                  onPickImage={(target) => setPicker({ blockId: currentBlock.id, ...target })}
                 />
               </fieldset>
             ) : (
@@ -1983,6 +2021,11 @@ function Workbench({
               }
               onEdit={edit}
               onAccept={async (asset, versionId) => {
+                if (documentImageSlots(project).some(({ ref }) => staleRef(ref, asset.id, versionId)))
+                  edit((draft) => {
+                    for (const slot of documentImageSlots(draft))
+                      if (staleRef(slot.ref, asset.id, versionId)) slot.set({ assetId: asset.id, versionId });
+                  });
                 setBusy("version");
                 try {
                   const saved = await flush();
@@ -2217,6 +2260,13 @@ function CoverEditor({ project, block, update, onPick }: {
 }) {
   const cover = block.cover ?? createCover();
   const change = (values: Partial<typeof cover>) => update({ ...block, cover: { ...cover, ...values } });
+  const teaser = cover.teaser ?? { url: "", label: "" };
+  const changeTeaser = (values: Partial<typeof teaser>) => {
+    const next = { ...teaser, ...values };
+    const nextCover: typeof cover = { ...cover, teaser: next };
+    if (!next.url && !next.label) delete nextCover.teaser;
+    update({ ...block, cover: nextCover });
+  };
   return <div className="cover-editor">
     <div className="field-divider"><span>封面与寄语</span><small>图片保留完整构图</small></div>
     <Field label="封面版式"><select aria-label="封面版式" value={block.cover ? cover.emphasis : "template"} onChange={event => {
@@ -2225,6 +2275,11 @@ function CoverEditor({ project, block, update, onPick }: {
     }}><option value="template">模板默认</option><option value="names">姓名主导 · 信息在前</option><option value="photo">照片主导 · 画面在前</option></select></Field>
     <Field label="封面短句"><input maxLength={120} value={block.cover?.headline ?? ""} placeholder="属于你们的婚礼影像。" onChange={event => change({ headline: event.target.value })} /></Field>
     <Field label="开篇寄语"><textarea maxLength={600} rows={3} value={cover.message} placeholder="写给这一次婚礼的短短几句话。" onChange={event => change({ message: event.target.value })} /></Field>
+    <div className="teaser-fields">
+      <Field label="预告链接"><input type="url" inputMode="url" maxLength={6000} value={teaser.url} placeholder="https://…" onChange={event => changeTeaser({ url: event.target.value.trim() })} /></Field>
+      <Field label="预告说明"><input maxLength={60} value={teaser.label} placeholder="1 分钟预告片" onChange={event => changeTeaser({ label: event.target.value })} /></Field>
+    </div>
+    <p className="field-hint">可选。长图中会在封面下方生成二维码，PDF 中显示为可点击的链接；链接需以 http:// 或 https:// 开头。</p>
     <DocumentImage project={project} image={cover.image} label="封面图" onPick={onPick} onRemove={() => change({ image: null })} />
     <p className="field-hint">选择项目中的成片，或上传一张代表性画面。切换版式不会裁切照片。</p>
   </div>;
@@ -2246,6 +2301,154 @@ function ProductionEditor({ project, block, update, onPick }: {
   </div>;
 }
 
+/** Rewrites `order` so it matches each item's position. */
+const renumber = <T extends { order: number }>(items: T[]) =>
+  sorted(items).map((item, order) => ({ ...item, order }));
+/** Moves one item without mutating the current project state; every `order` is rewritten. */
+const moveItem = <T extends { order: number }>(items: T[], index: number, direction: number) =>
+  reorder(items.map((item) => ({ ...item })), index, direction);
+
+function ItemOrderActions({ noun, index, count, onMove, onRemove }: {
+  noun: string; index: number; count: number;
+  onMove: (direction: number) => void; onRemove: () => void;
+}) {
+  return <span>
+    <IconButton label={`${noun}上移`} disabled={index === 0} onClick={() => onMove(-1)}><ArrowUp size={14} /></IconButton>
+    <IconButton label={`${noun}下移`} disabled={index === count - 1} onClick={() => onMove(1)}><ArrowDown size={14} /></IconButton>
+    <IconButton label={`删除${noun}`} onClick={onRemove}><Trash2 size={14} /></IconButton>
+  </span>;
+}
+
+function StillsEditor({ project, block, update, onPick }: {
+  project: ProjectRecord; block: Extract<DocumentBlock, { type: "stills" }>;
+  update: (block: DocumentBlock) => void; onPick: (frameId: string) => void;
+}) {
+  const frames = sorted(block.frames);
+  const visible = frames.filter((frame) => frame.visible).length;
+  const outOfRange = visible < STILLS_LIMITS.min || visible > STILLS_LIMITS.max;
+  const full = frames.length >= STILLS_LIMITS.max;
+  const change = (id: string, values: Partial<StillFrame>) =>
+    update({ ...block, frames: block.frames.map((frame) => frame.id === id ? { ...frame, ...values } : frame) });
+  const remove = (frame: StillFrame, label: string) => {
+    if ((frame.image || frame.caption.trim()) && !window.confirm(`移除“${label}”？图片仍保留在图片库中。`)) return;
+    update({ ...block, frames: renumber(block.frames.filter((item) => item.id !== frame.id)) });
+  };
+  return <div className="block-editor-content">
+    <p className="muted compact">建议 3–9 张。画面保持完整构图，不会被裁切；可写一句短说明。</p>
+    <div className={`list-count ${outOfRange ? "is-warning" : ""}`} role="status">
+      {outOfRange ? <AlertCircle size={14} /> : <CheckCircle2 size={14} />}
+      <span>{`已添加 ${frames.length} 张 · 可见 ${visible} 张`}</span>
+      {outOfRange && <small>{visible < STILLS_LIMITS.min ? `建议至少 ${STILLS_LIMITS.min} 张可见画面` : `建议不超过 ${STILLS_LIMITS.max} 张可见画面，可隐藏多余画面`}</small>}
+    </div>
+    <div className="stills-grid">
+      {frames.map((frame, index) => {
+        const label = `画面 ${index + 1}`;
+        return <div className={`delivery-item still-card ${frame.visible ? "" : "is-hidden"}`} key={frame.id}>
+          <div className="delivery-item-top">
+            <span className="item-number">{String(index + 1).padStart(2, "0")}</span>
+            <span className="item-heading">{label}</span>
+            <IconButton label={frame.visible ? "隐藏画面" : "显示画面"} onClick={() => change(frame.id, { visible: !frame.visible })}>
+              {frame.visible ? <Eye size={15} /> : <EyeOff size={15} />}
+            </IconButton>
+          </div>
+          <div className="delivery-item-fields">
+            {!frame.image && <div className="still-placeholder" aria-hidden="true"><ImageIcon size={22} /></div>}
+            <DocumentImage project={project} image={frame.image} label={label} onPick={() => onPick(frame.id)} onRemove={() => change(frame.id, { image: null })} />
+            <Field label={`${label} 说明`}>
+              <input maxLength={200} value={frame.caption} placeholder="一句短说明（可选）" onChange={(event) => change(frame.id, { caption: event.target.value })} />
+            </Field>
+            <div className="item-footer">
+              <span>{!frame.visible ? "本次隐藏" : frame.image ? "在交付中显示" : "尚未选择图片"}</span>
+              <ItemOrderActions noun="画面" index={index} count={frames.length}
+                onMove={(direction) => update({ ...block, frames: moveItem(block.frames, index, direction) })}
+                onRemove={() => remove(frame, label)} />
+            </div>
+          </div>
+        </div>;
+      })}
+    </div>
+    <button className="add-item" disabled={full} onClick={() => {
+      const frame = createStillFrame();
+      frame.order = block.frames.length;
+      update({ ...block, frames: [...block.frames, frame] });
+    }}>
+      <Plus size={16} />
+      添加画面
+    </button>
+    {full && <p className="field-hint">一条高光画面最多 {STILLS_LIMITS.max} 张。</p>}
+  </div>;
+}
+
+function TimelineEditor({ project, block, update, onPick }: {
+  project: ProjectRecord; block: Extract<DocumentBlock, { type: "timeline" }>;
+  update: (block: DocumentBlock) => void; onPick: (entryId: string) => void;
+}) {
+  const entries = sorted(block.entries);
+  const full = entries.length >= TIMELINE_MAX_ENTRIES;
+  const change = (id: string, values: Partial<TimelineEntry>) =>
+    update({ ...block, entries: block.entries.map((entry) => entry.id === id ? { ...entry, ...values } : entry) });
+  const remove = (entry: TimelineEntry) => {
+    const filled = entry.image || entry.time.trim() || entry.title.trim() || entry.note.trim();
+    if (filled && !window.confirm(`移除“${entry.title || "此时刻"}”？图片仍保留在图片库中。`)) return;
+    update({ ...block, entries: renumber(block.entries.filter((item) => item.id !== entry.id)) });
+  };
+  return <div className="block-editor-content">
+    <p className="muted compact">按时间顺序记录这一天的关键时刻；配图可选。</p>
+    {!entries.length && block.visible && (
+      <div className="inline-notice warning">
+        <AlertCircle size={17} />
+        此章节暂时没有时刻。添加时刻，或关闭左侧章节显示。
+      </div>
+    )}
+    <div className="delivery-items timeline-items">
+      {entries.map((entry, index) => {
+        const n = index + 1;
+        return <div className={`delivery-item timeline-entry ${entry.visible ? "" : "is-hidden"}`} key={entry.id}>
+          <div className="delivery-item-top">
+            <span className="item-number">{String(n).padStart(2, "0")}</span>
+            <span className="item-heading">
+              {entry.time && <span className="timeline-time">{entry.time}</span>}
+              {entry.title || "未命名时刻"}
+            </span>
+            <IconButton label={entry.visible ? "隐藏时刻" : "显示时刻"} onClick={() => change(entry.id, { visible: !entry.visible })}>
+              {entry.visible ? <Eye size={15} /> : <EyeOff size={15} />}
+            </IconButton>
+          </div>
+          <div className="delivery-item-fields">
+            <div className="timeline-entry-head">
+              <Field label={`时间点 ${n}`}>
+                <input maxLength={20} value={entry.time} placeholder="09:30" onChange={(event) => change(entry.id, { time: event.target.value })} />
+              </Field>
+              <Field label={`时刻标题 ${n}`}>
+                <input maxLength={120} value={entry.title} placeholder="例如：迎亲" onChange={(event) => change(entry.id, { title: event.target.value })} />
+              </Field>
+            </div>
+            <Field label={`时刻说明 ${n}`}>
+              <textarea rows={2} maxLength={600} value={entry.note} placeholder="这一刻发生了什么（可选）" onChange={(event) => change(entry.id, { note: event.target.value })} />
+            </Field>
+            <DocumentImage project={project} image={entry.image} label={`时刻配图 ${n}`} onPick={() => onPick(entry.id)} onRemove={() => change(entry.id, { image: null })} />
+            <div className="item-footer">
+              <span>{entry.visible ? "在交付中显示" : "本次隐藏"}</span>
+              <ItemOrderActions noun="时刻" index={index} count={entries.length}
+                onMove={(direction) => update({ ...block, entries: moveItem(block.entries, index, direction) })}
+                onRemove={() => remove(entry)} />
+            </div>
+          </div>
+        </div>;
+      })}
+    </div>
+    <button className="add-item" disabled={full} onClick={() => {
+      const entry = createTimelineEntry();
+      entry.order = block.entries.length;
+      update({ ...block, entries: [...block.entries, entry] });
+    }}>
+      <Plus size={16} />
+      添加时刻
+    </button>
+    {full && <p className="field-hint">时间线最多 {TIMELINE_MAX_ENTRIES} 个时刻。</p>}
+  </div>;
+}
+
 function BlockEditor({
   block,
   project,
@@ -2261,7 +2464,7 @@ function BlockEditor({
   update: (block: DocumentBlock) => void;
   onAssets: () => void;
   onPickLogo: () => void;
-  onPickImage: (purpose: "cover" | "evidence") => void;
+  onPickImage: (target: BlockImagePick) => void;
 }) {
   const fields = project.document.fields;
   const field = (key: keyof typeof fields, value: VisibleText) =>
@@ -2364,7 +2567,7 @@ function BlockEditor({
             正式预览时按工作室时区确定，PDF 与长图保持一致。
           </p>
         )}
-        <CoverEditor project={project} block={block} update={update} onPick={() => onPickImage("cover")} />
+        <CoverEditor project={project} block={block} update={update} onPick={() => onPickImage({ purpose: "cover" })} />
         <div className="field-divider">
           <span>内部记录</span>
           <span className="tag">仅自己可见</span>
@@ -2401,7 +2604,7 @@ function BlockEditor({
           <Sparkles size={16} />
           <span>切换模板不改变你的文字。先写客户能感受到的效果，再补充制作细节。</span>
         </div>
-        <ProductionEditor project={project} block={block} update={update} onPick={() => onPickImage("evidence")} />
+        <ProductionEditor project={project} block={block} update={update} onPick={() => onPickImage({ purpose: "evidence" })} />
       </div>
     );
   if (block.type === "signature")
@@ -2506,6 +2709,29 @@ function BlockEditor({
         )}
       </div>
     );
+  }
+  if (block.type === "stills")
+    return (
+      <StillsEditor
+        project={project}
+        block={block}
+        update={update}
+        onPick={(frameId) => onPickImage({ frameId })}
+      />
+    );
+  if (block.type === "timeline")
+    return (
+      <TimelineEditor
+        project={project}
+        block={block}
+        update={update}
+        onPick={(entryId) => onPickImage({ entryId })}
+      />
+    );
+  if (block.type !== "deliveries") {
+    const unsupported: never = block;
+    void unsupported;
+    return null;
   }
   const updateItem = (id: string, change: Partial<DeliveryItem>) =>
     update({
@@ -2940,6 +3166,7 @@ function AssetsEditor({
       ? sorted(block.comparisons).map((comparison) => ({ block, comparison }))
       : [],
   );
+  const documentSlots = documentImageSlots(project);
   const report = project.importReports.at(-1);
   const problems = groups.filter(
     ({ block, comparison }) =>
@@ -3353,13 +3580,15 @@ function AssetsEditor({
               (item) => item.id === asset.latestVersionId,
             );
             if (!version) return null;
-            const oldReference = groups.some(({ comparison }) =>
-              [comparison.before, comparison.after].some(
-                (ref) =>
-                  ref?.assetId === asset.id &&
-                  ref.versionId !== asset.latestVersionId,
-              ),
-            );
+            const oldReference =
+              groups.some(({ comparison }) =>
+                [comparison.before, comparison.after].some((ref) =>
+                  staleRef(ref, asset.id, asset.latestVersionId),
+                ),
+              ) ||
+              documentSlots.some(({ ref }) =>
+                staleRef(ref, asset.id, asset.latestVersionId),
+              );
             return (
               <div
                 className="library-asset"
@@ -3518,7 +3747,11 @@ function AssetPicker({
           ? "选择品牌 Logo"
           : "purpose" in target
             ? target.purpose === "cover" ? "选择封面图" : "选择制作说明图"
-            : `选择 ${target.side === "before" ? "Before 原图" : "After 调色后图片"}`
+            : "frameId" in target
+              ? "选择高光画面"
+              : "entryId" in target
+                ? "选择时刻配图"
+                : `选择 ${target.side === "before" ? "Before 原图" : "After 调色后图片"}`
       }
       subtitle="从已导入的图片选择，或直接添加一张新图片。"
       onClose={onClose}
@@ -3745,13 +3978,17 @@ function ExportDialog({
                   {result.artifacts.length > 0 && (
                     <small>
                       {result.artifacts
-                        .map((artifact) =>
-                          artifact.pages
+                        .map((artifact) => {
+                          const size = artifact.pages
                             ? `${artifact.pages} 页`
                             : artifact.width
                               ? `${artifact.width} × ${artifact.height} px`
-                              : bytes(artifact.byteSize),
-                        )
+                              : bytes(artifact.byteSize);
+                          if (artifact.role === "share") return `分享卡 ${size}`;
+                          return result.artifacts.some((item) => item.role === "share")
+                            ? `${labels[result.target]} ${size}`
+                            : size;
+                        })
                         .join(" · ")}
                     </small>
                   )}
@@ -3888,6 +4125,9 @@ function ExportDialog({
                         >
                           <Download size={13} />
                           {artifact.filename}
+                          {artifact.role === "share" && (
+                            <span className="tag artifact-role">分享卡</span>
+                          )}
                           <small>{bytes(artifact.byteSize)}</small>
                         </a>
                       ))

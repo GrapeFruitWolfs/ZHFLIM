@@ -2,24 +2,53 @@ import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { mkdir, rename, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { chromium, type Browser } from 'playwright';
+import { chromium, type Browser, type BrowserContext, type Page } from 'playwright';
 import sharp from 'sharp';
-import type { OutputSettings, OutputTarget } from '../shared/model.js';
+import type { ArtifactRole, OutputSettings, OutputTarget } from '../shared/model.js';
 import { digest, RENDERER_VERSION, RENDER_BUDGET } from './display.js';
 import { PAGE_CONTENT_HEIGHT, PAGE_HEIGHT, PAGE_WIDTH } from './templates.js';
 
 export class RenderFailure extends Error {
   constructor(public code: string, message: string, public blockId?: string, public comparisonId?: string) { super(message); }
 }
-export interface RenderedFile { filename: string; path: string; mime: string; byteSize: number; hash: string; width?: number; height?: number; pages?: number }
+export interface RenderedFile { filename: string; path: string; mime: string; byteSize: number; hash: string; width?: number; height?: number; pages?: number; role?: ArtifactRole }
 export interface EngineDependencies { renderer: string; chromium: string; platform: string }
 
+export interface ChromiumChoice { path?: string; source: 'env' | 'system' | 'playwright' | 'missing' }
+
+/**
+ * Locates the export browser. `WDS_CHROMIUM_PATH` wins (the full Windows package points it at its bundled
+ * Chrome for Testing). The lite Windows package ships no browser and uses the system Edge, then Chrome.
+ * Elsewhere Playwright's own Chromium is used unless a system Chromium exists on Linux.
+ */
+export function resolveChromiumPath(env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform, exists: (file: string) => boolean = existsSync): ChromiumChoice {
+  if (env.WDS_CHROMIUM_PATH) return { path: env.WDS_CHROMIUM_PATH, source: 'env' };
+  if (platform === 'win32') {
+    const roots = [env['ProgramFiles(x86)'], env.ProgramFiles, env.LOCALAPPDATA].filter((root): root is string => Boolean(root));
+    const candidates = [
+      ...roots.map(root => path.win32.join(root, 'Microsoft', 'Edge', 'Application', 'msedge.exe')),
+      ...roots.map(root => path.win32.join(root, 'Google', 'Chrome', 'Application', 'chrome.exe')),
+    ];
+    const found = candidates.find(file => exists(file));
+    return found ? { path: found, source: 'system' } : { source: 'missing' };
+  }
+  if (platform === 'linux' && exists('/usr/bin/chromium')) return { path: '/usr/bin/chromium', source: 'system' };
+  return { source: 'playwright' };
+}
+
 export async function startRenderer(): Promise<{ browser: Browser; dependencies: EngineDependencies }> {
-  const executablePath = process.env.WDS_CHROMIUM_PATH || (process.platform === 'linux' && existsSync('/usr/bin/chromium') ? '/usr/bin/chromium' : undefined);
-  const browser = await chromium.launch({
-    headless: true, executablePath, timeout: 45_000,
-    args: [...(typeof process.getuid === 'function' && process.getuid() === 0 ? ['--no-sandbox'] : []), ...(process.platform === 'linux' ? ['--disable-dev-shm-usage'] : [])],
-  });
+  const choice = resolveChromiumPath();
+  if (choice.source === 'missing') throw new RenderFailure('BROWSER_MISSING', '未找到用于导出的浏览器。请安装或修复 Microsoft Edge 或 Google Chrome，或用 WDS_CHROMIUM_PATH 指定 msedge.exe／chrome.exe；也可以改用内置浏览器的完整版。');
+  let browser: Browser;
+  try {
+    browser = await chromium.launch({
+      headless: true, executablePath: choice.path, timeout: 45_000,
+      args: [...(typeof process.getuid === 'function' && process.getuid() === 0 ? ['--no-sandbox'] : []), ...(process.platform === 'linux' ? ['--disable-dev-shm-usage'] : [])],
+    });
+  } catch (error) {
+    if (choice.source !== 'system') throw error;
+    throw new RenderFailure('BROWSER_LAUNCH_FAILED', `无法启动本机浏览器（${choice.path}）。请更新 Edge／Chrome 后重试，或改用内置浏览器的完整版。`);
+  }
   return { browser, dependencies: { renderer: RENDERER_VERSION, chromium: browser.version(), platform: `${process.platform}-${process.arch}` } };
 }
 
@@ -34,6 +63,42 @@ async function persistFile(directory: string, filename: string, bytes: Buffer, m
   return { filename, path: destination, byteSize: info.size, hash: digest(bytes), ...metadata };
 }
 
+/**
+ * Keep the persisted source self-contained, but avoid sending a 20+ MiB font data URL
+ * through HTML/CSS parsing. Only these exact, immutable bytes may satisfy a font request.
+ */
+async function openRenderContext(browser: Browser, html: string, viewport: { width: number; height: number }, deviceScaleFactor: number): Promise<{ compactHtml: string; context: BrowserContext }> {
+  const fontResources = new Map<string, Buffer>();
+  const compactHtml = html.replace(/data:font\/ttf;base64,([A-Za-z0-9+/=]+)/g, (_match, encoded: string) => {
+    const bytes = Buffer.from(encoded, 'base64');
+    const address = `https://studio-fonts.invalid/${digest(bytes)}.ttf`;
+    fontResources.set(address, bytes);
+    return address;
+  }).replace("font-src data: 'self'", 'font-src https://studio-fonts.invalid');
+  const context = await browser.newContext({ viewport, deviceScaleFactor, colorScheme: 'light', locale: 'zh-CN', reducedMotion: 'reduce' });
+  try {
+    await context.route('**/*', async route => {
+      const font = fontResources.get(route.request().url());
+      if (font) await route.fulfill({ status: 200, contentType: 'font/ttf', headers: { 'Access-Control-Allow-Origin': '*' }, body: font });
+      else await route.abort();
+    });
+  } catch (error) { await context.close(); throw error; }
+  return { compactHtml, context };
+}
+
+/** Wait for fonts and images; a font that failed to load must never fall back silently. */
+async function settlePage(page: Page): Promise<void> {
+  // tsx/esbuild can annotate nested evaluated functions with this naming helper.
+  // It affects function names only; the customer HTML never contains executable code.
+  await page.evaluate('globalThis.__name = (value) => value');
+  await page.evaluate(async () => {
+    await document.fonts.ready;
+    await Promise.all([...document.images].map(image => image.decode()));
+  });
+  const fontFailed = await page.evaluate(() => [...document.fonts].some(font => font.status === 'error'));
+  if (fontFailed) throw new RenderFailure('FONT_LOAD_FAILED', '正式渲染字体未能加载，请恢复打包字体后重新预览。');
+}
+
 /** Each PDF page / image segment is laid out before capture, never sliced through text. */
 export async function renderTarget(browser: Browser, html: string, target: OutputTarget, settings: OutputSettings, directory: string): Promise<RenderedFile[]> {
   if (Buffer.byteLength(html, 'utf8') > RENDER_BUDGET.htmlBytes) throw new RenderFailure('RESOURCE_BUDGET', '本次渲染内容超过 96MiB 工作预算，请减少可见图片或分为不同文档。');
@@ -42,34 +107,12 @@ export async function renderTarget(browser: Browser, html: string, target: Outpu
     throw new RenderFailure('IMAGE_DIMENSIONS', '长图宽度需要在 720–2160 像素内，每段高度需要在 2000–16000 像素内。');
   }
   const scale = target === 'image' ? imageWidth / PAGE_WIDTH : 1;
-  // Keep the persisted source self-contained, but avoid sending a 20+ MiB font data URL
-  // through HTML/CSS parsing. Only these exact, immutable bytes may satisfy a font request.
-  const fontResources = new Map<string, Buffer>();
-  const compactHtml = html.replace(/data:font\/ttf;base64,([A-Za-z0-9+/=]+)/g, (_match, encoded: string) => {
-    const bytes = Buffer.from(encoded, 'base64');
-    const address = `https://studio-fonts.invalid/${digest(bytes)}.ttf`;
-    fontResources.set(address, bytes);
-    return address;
-  }).replace("font-src data: 'self'", 'font-src https://studio-fonts.invalid');
-  const context = await browser.newContext({ viewport: { width: PAGE_WIDTH, height: PAGE_HEIGHT }, deviceScaleFactor: scale, colorScheme: 'light', locale: 'zh-CN', reducedMotion: 'reduce' });
-  await context.route('**/*', async route => {
-    const font = fontResources.get(route.request().url());
-    if (font) await route.fulfill({ status: 200, contentType: 'font/ttf', headers: { 'Access-Control-Allow-Origin': '*' }, body: font });
-    else await route.abort();
-  });
+  const { compactHtml, context } = await openRenderContext(browser, html, { width: PAGE_WIDTH, height: PAGE_HEIGHT }, scale);
   const page = await context.newPage();
   page.setDefaultTimeout(45_000);
   try {
     await page.setContent(compactHtml, { waitUntil: 'load', timeout: 45_000 });
-    // tsx/esbuild can annotate nested evaluated functions with this naming helper.
-    // It affects function names only; the customer HTML never contains executable code.
-    await page.evaluate('globalThis.__name = (value) => value');
-    await page.evaluate(async () => {
-      await document.fonts.ready;
-      await Promise.all([...document.images].map(image => image.decode()));
-    });
-    const fontFailed = await page.evaluate(() => [...document.fonts].some(font => font.status === 'error'));
-    if (fontFailed) throw new RenderFailure('FONT_LOAD_FAILED', '正式渲染字体未能加载，请恢复打包字体后重新预览。');
+    await settlePage(page);
     const layout = await page.evaluate(({ target, capacity, imageCap, allowImageSegments, allowComparisonPageBreak }) => {
       const root = document.querySelector<HTMLElement>('.render-root')!;
       const flow = root.querySelector<HTMLElement>('.flow')!;
@@ -206,8 +249,31 @@ export async function renderTarget(browser: Browser, html: string, target: Outpu
       const image = await page.locator('.image-segment').nth(index).screenshot({ type: 'png', animations: 'disabled', timeout: 45_000 });
       const encoded = await sharp(image).toColourspace('srgb').jpeg({ quality: 94, chromaSubsampling: '4:4:4' }).toBuffer({ resolveWithObject: true });
       if (encoded.info.height > settings.segmentHeight + 2 || Math.abs(encoded.info.width - imageWidth) > 1) throw new RenderFailure('IMAGE_DIMENSION_MISMATCH', '长图尺寸校验失败，产物未登记成功。');
-      results.push(await persistFile(directory, `wedding-delivery${layout.count > 1 ? `-${String(index + 1).padStart(2, '0')}` : ''}.jpg`, encoded.data, { mime: 'image/jpeg', width: encoded.info.width, height: encoded.info.height }));
+      results.push(await persistFile(directory, `wedding-delivery${layout.count > 1 ? `-${String(index + 1).padStart(2, '0')}` : ''}.jpg`, encoded.data, { mime: 'image/jpeg', width: encoded.info.width, height: encoded.info.height, role: 'segment' }));
     }
     return results;
+  } finally { await context.close(); }
+}
+
+export const SHARE_CARD = { width: 1080, height: 1920, cssWidth: 432, cssHeight: 768, scale: 2.5 } as const;
+
+/**
+ * Captures the optional `<section class="share-card">` of the image-target HTML as a 1080×1920 JPEG.
+ * Returns undefined when the HTML carries no share card.
+ */
+export async function renderShareCard(browser: Browser, html: string, directory: string): Promise<RenderedFile | undefined> {
+  if (!/class="share-card(?:\s[^"]*)?"/.test(html)) return undefined;
+  if (Buffer.byteLength(html, 'utf8') > RENDER_BUDGET.htmlBytes) throw new RenderFailure('RESOURCE_BUDGET', '本次渲染内容超过 96MiB 工作预算，请减少可见图片或分为不同文档。');
+  const { compactHtml, context } = await openRenderContext(browser, html, { width: SHARE_CARD.cssWidth, height: SHARE_CARD.cssHeight }, SHARE_CARD.scale);
+  try {
+    const page = await context.newPage();
+    page.setDefaultTimeout(45_000);
+    await page.setContent(compactHtml, { waitUntil: 'load', timeout: 45_000 });
+    await page.evaluate(() => { document.documentElement.dataset.mode = 'share'; });
+    await settlePage(page);
+    const image = await page.locator('.share-card').first().screenshot({ type: 'png', animations: 'disabled', timeout: 45_000 });
+    const encoded = await sharp(image).toColourspace('srgb').jpeg({ quality: 94, chromaSubsampling: '4:4:4' }).toBuffer({ resolveWithObject: true });
+    if (Math.abs(encoded.info.width - SHARE_CARD.width) > 1 || Math.abs(encoded.info.height - SHARE_CARD.height) > 1) throw new RenderFailure('SHARE_CARD_DIMENSION_MISMATCH', '分享卡尺寸校验失败，产物未登记成功。');
+    return await persistFile(directory, 'wedding-share-card.jpg', encoded.data, { mime: 'image/jpeg', width: encoded.info.width, height: encoded.info.height, role: 'share' });
   } finally { await context.close(); }
 }

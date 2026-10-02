@@ -18,12 +18,17 @@ const ref = z.object({ assetId: id, versionId: id }).strict();
 const comparison = z.object({ id, title: short, description: short.optional(), order, visible: z.boolean(), before: ref.nullable(), after: ref.nullable(), sourceKey: z.string().max(3000).optional(), locked: z.boolean() }).strict();
 const item = z.object({ id, title: short, description: text, format: short, method: z.enum(['link', 'attachment', 'offline', 'description']), downloadUrl: url, playbackUrl: url, accessNote: short, visible: z.boolean(), order }).strict();
 const base = { id, title: short, visible: z.boolean(), order };
+const frame = z.object({ id, image: ref.nullable(), caption: z.string().max(200), order, visible: z.boolean() }).strict();
+const entry = z.object({ id, time: z.string().max(20), title: z.string().max(120), note: z.string().max(600), image: ref.nullable(), order, visible: z.boolean() }).strict();
+const teaser = z.object({ url, label: z.string().max(60) }).strict();
 const block = z.discriminatedUnion('type', [
-  z.object({ ...base, type: z.literal('intro'), cover: z.object({ emphasis: z.enum(['names', 'photo']), headline: z.string().max(120), message: z.string().max(600), image: ref.nullable() }).strict().optional() }).strict(),
+  z.object({ ...base, type: z.literal('intro'), cover: z.object({ emphasis: z.enum(['names', 'photo']), headline: z.string().max(120), message: z.string().max(600), image: ref.nullable(), teaser: teaser.optional() }).strict().optional() }).strict(),
   z.object({ ...base, type: z.literal('deliveries'), items: z.array(item).max(300) }).strict(),
   z.object({ ...base, type: z.literal('text'), content: text, sourceDefinitionId: id.optional(), details: z.object({ content: text, image: ref.nullable(), caption: short, placement: z.enum(['inline', 'appendix', 'hidden']) }).strict().optional() }).strict(),
   z.object({ ...base, type: z.literal('comparisons'), layout: z.enum(['stacked', 'split', 'inherit']), comparisons: z.array(comparison).max(2000) }).strict(),
   z.object({ ...base, type: z.literal('signature') }).strict(),
+  z.object({ ...base, type: z.literal('stills'), frames: z.array(frame).max(30) }).strict(),
+  z.object({ ...base, type: z.literal('timeline'), entries: z.array(entry).max(24) }).strict(),
 ]);
 const version = z.object({ id, hash: z.string().regex(/^[a-f0-9]{64}$/), filename: short, width: z.number().int().positive(), height: z.number().int().positive(), mime: z.enum(['image/jpeg', 'image/png']), byteSize: z.number().int().positive(), storageKey: z.string().min(1).max(500), createdAt: z.string().datetime(), derivativeHash: z.string().regex(/^[a-f0-9]{64}$/), originalStorageKey: z.string().min(1).max(500) }).strict();
 const root = z.object({ id, label: short, rule: z.enum(['after-first', 'before-first', 'words', 'manual']), createdAt: z.string().datetime() }).strict();
@@ -79,6 +84,8 @@ export function validateProject(value: unknown, tenantId: string): ProjectRecord
     if (block.type === 'text' && block.details) checkRef(block.details.image);
     if (block.type === 'deliveries') block.items.forEach(item => take(item.id));
     if (block.type === 'comparisons') block.comparisons.forEach(item => { take(item.id); checkRef(item.before); checkRef(item.after); });
+    if (block.type === 'stills') block.frames.forEach(item => { take(item.id); checkRef(item.image); });
+    if (block.type === 'timeline') block.entries.forEach(item => { take(item.id); checkRef(item.image); });
   }
   for (const report of project.importReports) if (!roots.has(report.rootId)) throw new StudioError('IMPORT_ROOT', '导入报告来源不存在。');
   project.document.blocks = normalizeChapters(project.document.blocks);

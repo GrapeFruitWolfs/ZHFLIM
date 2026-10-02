@@ -11,7 +11,8 @@ import Fastify from 'fastify';
 import { createCover, createDeliveryItem, createProject, createTextBlock } from '../src/shared/defaults.js';
 import type { AssetVersion, ComparisonBlock, ProjectRecord, StudioSettings } from '../src/shared/model.js';
 import type { StudioStore } from '../src/server/contracts.js';
-import { candidateIsStale, digest, loadFonts, prepareDisplay, resolvedDeliveryDate, safeDeliveryUrl, settingsFingerprint } from '../src/rendering/display.js';
+import { candidateIsStale, detectLetterbox, digest, loadFonts, NO_BARS, prepareDisplay, resolvedDeliveryDate, safeDeliveryUrl, settingsFingerprint } from '../src/rendering/display.js';
+import { brandColor, contrastRatio, templates } from '../src/rendering/templates.js';
 import { renderHtml, textChunks } from '../src/rendering/html.js';
 import { checkGlyphCoverage } from '../src/rendering/fonts.js';
 import { RenderFailure, renderTarget, startRenderer } from '../src/rendering/engine.js';
@@ -115,7 +116,7 @@ test('missing bundled fonts block formal output while quick previews retain an e
   const directory = await mkdtemp(path.join(os.tmpdir(), 'wds-missing-fonts-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const formal = await loadFonts(directory);
-  assert.equal(formal.issues.length, 2);
+  assert.equal(formal.issues.length, 3);
   assert.ok(formal.issues.every(issue => issue.severity === 'error' && issue.code === 'FONT_UNAVAILABLE'));
   const quick = await loadFonts(directory, false);
   assert.ok(quick.issues.every(issue => issue.severity === 'warning' && issue.code === 'FONT_FALLBACK'));
@@ -356,4 +357,104 @@ test('a later target source-write failure preserves the earlier ready PDF and ca
   assert.equal(candidate.results.find((result: { target: string }) => result.target === 'pdf').status, 'ready');
   assert.equal(candidate.results.find((result: { target: string }) => result.target === 'image').status, 'failed');
   assert.ok(candidate.previewUrls.pdf); assert.ok(candidate.id);
+});
+
+async function filmStill(width: number, height: number, band: number, base = '#8d7b66'): Promise<Buffer> {
+  const picture = await sharp({ create: { width, height: height - band * 2, channels: 3, background: base } }).png().toBuffer();
+  return sharp({ create: { width, height, channels: 3, background: '#000000' } }).composite([{ input: picture, left: 0, top: band }]).png().toBuffer();
+}
+
+test('letterbox detection trims baked-in film bands but never dark pictures or hairlines', async () => {
+  const bars = await detectLetterbox(await filmStill(1600, 900, 120));
+  assert.ok(bars.top > 0.13 && bars.top < 0.14 && bars.bottom > 0.13 && bars.bottom < 0.14, JSON.stringify(bars));
+  assert.equal(bars.left, 0); assert.equal(bars.right, 0);
+  assert.deepEqual(await detectLetterbox(await filmStill(1600, 900, 6)), NO_BARS);
+  assert.deepEqual(await detectLetterbox(await sharp({ create: { width: 1200, height: 800, channels: 3, background: '#060606' } }).png().toBuffer()), NO_BARS);
+});
+
+test('comparison pairs share one crop so Before and After framing stays identical; covers get a blurred fill', async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'wds-letterbox-')); t.after(() => rm(directory, { recursive: true, force: true }));
+  const store = new MemoryStore(directory, sample());
+  const add = async (index: number, bytes: Buffer) => {
+    const location = path.join(directory, `still-${index}.png`); await writeFile(location, bytes);
+    const versionId = `still-version-${index}`;
+    const version: AssetVersion = { id: versionId, hash: digest(bytes), derivativeHash: digest(bytes), filename: `still-${index}.png`, width: 1600, height: 900, mime: 'image/png', byteSize: bytes.length, storageKey: location, originalStorageKey: location, createdAt: new Date().toISOString() };
+    store.current.assets.push({ id: `still-${index}`, tenantId: settings.tenantId, projectId: store.current.id, rootId: 'root', relativePath: `still-${index}.png`, versions: [version], latestVersionId: versionId });
+    store.paths.set(versionId, { path: location, version });
+    return { assetId: `still-${index}`, versionId };
+  };
+  const banded = [await add(0, await filmStill(1600, 900, 120)), await add(1, await filmStill(1600, 900, 120, '#a08a70'))];
+  const plain = await add(2, await filmStill(1600, 900, 0));
+  store.current.document.blocks.push({ id: 'stills', type: 'comparisons', title: '画面', visible: true, order: 1, layout: 'stacked', comparisons: [
+    { id: 'both', title: '两张都有遮幅', visible: true, order: 0, locked: true, before: banded[0], after: banded[1] },
+    { id: 'one', title: '只有一张有遮幅', visible: true, order: 1, locked: true, before: banded[0], after: plain },
+  ] });
+  const intro = store.current.document.blocks.find(block => block.type === 'intro')!;
+  if (intro.type === 'intro') intro.cover = { ...createCover(), image: banded[1] };
+  const prepared = await prepareDisplay(store.current, store, '2026-09-28');
+  const pairs = prepared.display.blocks.find(block => block.type === 'comparisons');
+  assert.ok(pairs?.type === 'comparisons');
+  const [both, one] = pairs.comparisons;
+  assert.equal(both.before!.height, both.after!.height);
+  assert.ok(both.before!.height < 700, 'shared bands are removed');
+  assert.equal(one.before!.height, 900); assert.equal(one.after!.height, 900);
+  const cover = prepared.display.blocks.find(block => block.type === 'intro');
+  assert.ok(cover?.type === 'intro' && cover.cover?.image?.backdrop?.startsWith('data:image/jpeg;base64,'));
+  assert.ok(cover.cover!.image!.height < 700);
+});
+
+test('templates keep their own palette; studio colour only marks the brand when it stays legible', () => {
+  assert.equal(brandColor(templates.gallery, '#57654f'), templates.gallery.accent);
+  assert.equal(brandColor(templates.cinematic, '#57654f'), templates.cinematic.accent);
+  assert.equal(brandColor(templates.editorial, '#57654f'), '#57654f');
+  assert.equal(brandColor(templates.editorial, 'not-a-colour'), templates.editorial.accent);
+  for (const template of Object.values(templates)) assert.ok(contrastRatio(template.accent, template.background) >= 3, `${template.id} accent must be legible`);
+  const display = { templateId: 'gallery' as const, accent: '#57654f', tagline: '', blocks: [], output: sample().document.output };
+  const html = renderHtml(display, 'image', { css: '', hashes: {}, issues: [] });
+  assert.ok(html.includes(`--accent:${templates.gallery.accent}`) && html.includes(`--brand:${templates.gallery.accent}`));
+});
+
+test('every template renders its own photo cover and keeps the cover message as a separate pagination unit', () => {
+  const image = { uri: 'data:image/jpeg;base64,AAAA', width: 1600, height: 900, backdrop: 'data:image/jpeg;base64,BBBB' };
+  for (const templateId of TEMPLATE_IDS) {
+    const display = { templateId, accent: '#a78964', tagline: '', studio: '行间影像', blocks: [{ type: 'intro' as const, id: 'intro', title: '封面', names: '林与陈', weddingDate: '2026-09-19', cover: { emphasis: 'photo' as const, headline: 'COVER_HEADLINE', message: 'COVER_MESSAGE', image } }], output: sample().document.output };
+    const html = renderHtml(display, 'pdf', { css: '', hashes: {}, issues: [] });
+    assert.ok(html.includes(`cv-cover cv-${templateId} photo-first has-photo`), templateId);
+    assert.ok(html.includes('class="story-photo cv-photo'), templateId);
+    assert.ok(html.includes('COVER_HEADLINE') && html.includes('class="unit cv-message-unit'), templateId);
+  }
+});
+
+test('rhythm components reuse visible images only: reveal needs identical framing, tickets close every card, finale avoids repeating the cover', () => {
+  const still = (tag: string, width = 1600, height = 900) => ({ uri: `data:image/jpeg;base64,${tag}`, width, height });
+  const cover = still('COVER');
+  const display = {
+    templateId: 'editorial' as const, accent: '#a78964', tagline: '', studio: '行间影像', output: sample().document.output,
+    blocks: [
+      { type: 'intro' as const, id: 'intro', title: '封面', names: '林与陈', weddingDate: '2026-09-19', cover: { emphasis: 'photo' as const, headline: '', message: '', image: cover } },
+      { type: 'deliveries' as const, id: 'films', title: '交付', items: [
+        { id: 'a', title: 'FILM_A', description: '描述', format: '4K · H.265', accessNote: '链接待填写', links: [] },
+        { id: 'b', title: 'FILM_B', description: '', format: '', accessNote: '', links: [] },
+      ] },
+      { type: 'comparisons' as const, id: 'pairs', title: '画面', layout: 'stacked' as const, comparisons: [
+        { id: 'mixed', title: 'MIXED', number: '01', before: still('B1', 900, 1350), after: still('A1') },
+        { id: 'same', title: 'SAME', number: '02', before: still('B2'), after: still('A2') },
+        { id: 'last', title: 'LAST', number: '03', before: still('B3'), after: cover },
+      ] },
+      { type: 'signature' as const, id: 'sig', title: '谢谢', photographer: 'ZH' },
+    ],
+  };
+  const html = renderHtml(display, 'image', { css: '', hashes: {}, issues: [] });
+  const revealHtml = html.slice(html.indexOf('class="unit reveal-unit"'), html.indexOf('class="unit comparison-unit"'));
+  assert.ok(revealHtml.includes('base64,A2') && revealHtml.includes('base64,B2') && revealHtml.includes('SAME'));
+  assert.ok(!revealHtml.includes('base64,B1'));
+  const markup = html.slice(html.indexOf('<body'));
+  assert.equal(markup.match(/ticket-start/g)?.length, 2);
+  assert.equal(markup.match(/ticket-end/g)?.length, 2);
+  assert.ok(html.includes('class="unit ticket ticket-start ticket-end"'), 'a single-part item is one closed card');
+  assert.ok(html.includes('<span class="chip">4K</span><span class="chip">H.265</span>'));
+  const finaleHtml = html.slice(html.indexOf('class="unit finale-unit"'), html.indexOf('class="unit signature"'));
+  assert.ok(finaleHtml.includes('base64,A2') && !finaleHtml.includes('base64,COVER'));
+  assert.equal(markup.match(/class="story-photo /g)?.length, 1, 'only the cover carries the cover hook');
+  assert.ok(html.indexOf('finale-unit') < html.indexOf('class="unit signature"'));
 });

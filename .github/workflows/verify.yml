@@ -44,6 +44,9 @@ jobs:
       - name: Build and execute Windows portable runtime
         if: runner.os == 'Windows' && github.event_name != 'pull_request'
         run: npm run package:windows
+      - name: Build and execute Windows lite runtime (system Edge)
+        if: runner.os == 'Windows' && github.event_name != 'pull_request'
+        run: npm run package:windows:lite
       - name: Keep browser evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

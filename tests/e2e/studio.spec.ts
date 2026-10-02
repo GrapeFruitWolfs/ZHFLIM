@@ -368,3 +368,43 @@ test.describe('touch chapter ordering', () => {
     await cdp.detach();
   });
 });
+
+test('highlight stills, timeline and cover teaser are editable and persist', async ({ page }) => {
+  const id = await createInBrowser(page, '高光画面与当天时间线');
+  await page.getByLabel('添加章节', { exact: true }).selectOption('stills');
+  await expect(page.getByText('已添加 3 张 · 可见 3 张', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '选择画面 1', exact: true }).click();
+  const picker = page.getByRole('dialog', { name: '选择高光画面' });
+  await picker.locator('input[type="file"]').setInputFiles({ name: 'still-01.png', mimeType: 'image/png', buffer: await sharp({ create: { width: 1600, height: 900, channels: 3, background: '#b9a48c' } }).png().toBuffer() });
+  await expect(picker).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '替换画面 1', exact: true })).toBeVisible();
+  await page.getByLabel('画面 1 说明', { exact: true }).fill('交换戒指前的一次深呼吸。');
+  await saved(page);
+
+  await page.getByLabel('添加章节', { exact: true }).selectOption('timeline');
+  await page.getByLabel('时刻标题 1', { exact: true }).fill('清晨，化妆间的阳光');
+  await saved(page);
+
+  await page.locator('.block-nav-item').filter({ hasText: '序言与新人信息' }).locator('.chapter-select').click();
+  await page.getByLabel('预告链接', { exact: true }).fill('https://example.com/teaser');
+  await page.getByLabel('预告说明', { exact: true }).fill('1 分钟预告片');
+  await saved(page);
+
+  await page.reload();
+  await expect(page.getByLabel('预告链接', { exact: true })).toHaveValue('https://example.com/teaser');
+  const record = await projectFromApi(page, id);
+  const blocks = [...record.document.blocks].sort((a, b) => a.order - b.order);
+  expect(blocks.at(-1)?.type).toBe('signature');
+  const stills = blocks.find(block => block.type === 'stills');
+  const timeline = blocks.find(block => block.type === 'timeline');
+  const intro = blocks.find(block => block.type === 'intro');
+  if (stills?.type !== 'stills' || timeline?.type !== 'timeline' || intro?.type !== 'intro') throw new Error('expected stills, timeline and intro chapters');
+  const frames = [...stills.frames].sort((a, b) => a.order - b.order);
+  expect(frames).toHaveLength(3);
+  expect(frames[0].image).not.toBeNull();
+  expect(record.assets.some(asset => asset.id === frames[0].image?.assetId)).toBe(true);
+  expect(frames[0].caption).toBe('交换戒指前的一次深呼吸。');
+  const entries = [...timeline.entries].sort((a, b) => a.order - b.order);
+  expect(entries[0].title).toBe('清晨，化妆间的阳光');
+  expect(intro.cover?.teaser).toEqual({ url: 'https://example.com/teaser', label: '1 分钟预告片' });
+});

@@ -9,6 +9,8 @@ import { StudioError } from '../domain/errors.js';
 import { ensureChapterAnchors } from '../shared/chapters.js';
 import type { StudioStore } from './contracts.js';
 
+/** 4: highlight stills, day timeline and cover teaser; v0.3.0 cannot read these blocks and must refuse the workspace. */
+export const WORKSPACE_SCHEMA = 4;
 export class SqliteStudioStore implements StudioStore {
   readonly dataDir: string;
   private db: DatabaseSync;
@@ -18,7 +20,7 @@ export class SqliteStudioStore implements StudioStore {
     mkdirSync(this.dataDir, { recursive: true });
     this.db = new DatabaseSync(resolve(this.dataDir, 'workspace.sqlite'));
     const schemaVersion = (this.db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version;
-    if (schemaVersion > 3) {
+    if (schemaVersion > WORKSPACE_SCHEMA) {
       this.db.close();
       throw new StudioError('SCHEMA_TOO_NEW', '这些项目资料由较新版本的 Wedding Delivery Studio 保存，请使用新版应用打开；资料未被修改。', 409);
     }
@@ -27,7 +29,7 @@ export class SqliteStudioStore implements StudioStore {
       CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, revision INTEGER NOT NULL, data TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS projects_tenant ON projects(tenant_id);
       CREATE TABLE IF NOT EXISTS records (tenant_id TEXT NOT NULL, kind TEXT NOT NULL, id TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(tenant_id, kind, id));`);
-    if (schemaVersion < 3) this.db.exec('PRAGMA user_version=3');
+    if (schemaVersion < WORKSPACE_SCHEMA) this.db.exec(`PRAGMA user_version=${WORKSPACE_SCHEMA}`);
     const row = this.db.prepare('SELECT data FROM studio_settings WHERE singleton=1').get() as { data: string } | undefined;
     this.settings = row ? parseSettings(JSON.parse(row.data)) : { tenantId: newId(), studioName: '我的工作室', photographerName: '', tagline: 'A STORY IN MOTION', accent: '#a78964', timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC' };
     if (!row) this.db.prepare('INSERT INTO studio_settings(singleton,data) VALUES(1,?)').run(JSON.stringify(this.settings));

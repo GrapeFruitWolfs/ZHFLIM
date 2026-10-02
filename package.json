@@ -1,6 +1,6 @@
 {
   "name": "wedding-delivery-studio",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -15,6 +15,7 @@
     "test": "tsx --test --test-concurrency=1 tests/*.test.ts",
     "test:e2e": "playwright test",
     "package:windows": "node scripts/package-windows.mjs",
+    "package:windows:lite": "node scripts/package-windows.mjs --lite",
     "test:runtime": "node scripts/smoke-runtime.mjs",
     "review:visual": "tsx scripts/visual-review.ts",
     "review:case": "tsx scripts/render-case.ts",

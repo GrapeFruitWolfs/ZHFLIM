@@ -4,14 +4,14 @@ import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
 import type { Browser } from 'playwright';
-import type { Artifact, ExportRecord, Issue, OutputTarget, PreviewCandidate, ProjectRecord, TargetResult } from '../shared/model.js';
+import type { Artifact, ExportRecord, Issue, OutputSettings, OutputTarget, PreviewCandidate, ProjectRecord, TargetResult } from '../shared/model.js';
 import { outputTargets } from '../shared/model.js';
 import { StudioError } from '../domain/errors.js';
 import type { ServerConfig, StudioStore } from './contracts.js';
 import { candidateIsStale, digest, escapeHtml, loadFonts, makeIssue, prepareDisplay, resolvedDeliveryDate, settingsFingerprint, verifyAssets, RENDER_BUDGET, type AssetDependency } from '../rendering/display.js';
 import { renderHtml } from '../rendering/html.js';
 import { checkGlyphCoverage } from '../rendering/fonts.js';
-import { RenderFailure, renderTarget, startRenderer, type EngineDependencies, type RenderedFile } from '../rendering/engine.js';
+import { RenderFailure, renderShareCard, renderTarget, startRenderer, type EngineDependencies, type RenderedFile } from '../rendering/engine.js';
 
 interface StoredArtifact { tenantId: string; projectId: string; candidateId: string; artifact: Artifact; relativePath: string }
 interface StoredCandidate {
@@ -75,11 +75,19 @@ export async function registerExportRoutes(app: FastifyInstance, store: StudioSt
       const artifact: Artifact = {
         id, target, filename: file.filename, mime: file.mime, byteSize: file.byteSize, hash: file.hash,
         ...(file.width !== undefined ? { width: file.width } : {}), ...(file.height !== undefined ? { height: file.height } : {}), ...(file.pages !== undefined ? { pages: file.pages } : {}),
+        ...(file.role !== undefined ? { role: file.role } : {}),
         url: `/api/projects/${stored.candidate.projectId}/artifacts/${id}`,
       };
       store.putRecord<StoredArtifact>('artifact', id, { tenantId: stored.tenantId, projectId: stored.candidate.projectId, candidateId: stored.candidate.id, artifact, relativePath: path.relative(exportRoot, file.path) });
       return artifact;
     });
+  }
+  /** Long-image segments first (unchanged order), then the optional share card. */
+  async function renderOutput(browser: Browser, html: string, target: OutputTarget, settings: OutputSettings, directory: string): Promise<RenderedFile[]> {
+    const files = await renderTarget(browser, html, target, settings, directory);
+    if (target !== 'image') return files;
+    const share = await renderShareCard(browser, html, directory);
+    return share ? [...files, share] : files;
   }
   async function artifactBytes(projectId: string, artifact: Artifact): Promise<Buffer> {
     const value = store.getRecord<StoredArtifact>('artifact', artifact.id);
@@ -124,7 +132,7 @@ export async function registerExportRoutes(app: FastifyInstance, store: StudioSt
           }
           candidate.results.push({ target, status: 'running', artifacts: [] });
           store.putRecord('candidate', id, stored);
-          const files = await renderTarget(browser, html, target, snapshot.document.output, directory);
+          const files = await renderOutput(browser, html, target, snapshot.document.output, directory);
           const artifacts = registerArtifacts(files, target, stored);
           candidate.results[candidate.results.findIndex(result => result.target === target)] = { target, status: 'ready', artifacts };
           candidate.previewUrls[target] = target === 'pdf' ? artifacts[0].url : `/api/projects/${projectId}/candidates/${id}/preview/image`;
@@ -218,7 +226,7 @@ export async function registerExportRoutes(app: FastifyInstance, store: StudioSt
       }
       const source = entry.frozen.sources[input.target];
       if (!source) throw new StudioError('HISTORICAL_SOURCE_MISSING', '历史渲染输入缺失，无法重试；请恢复备份或创建新版本。', 409);
-      const blockers = entry.frozen.candidate.issues.filter(issue => issue.severity === 'error' && (issue.scope === 'all' || issue.scope === input.target) && issue.code !== 'RENDER_FAILED');
+      const blockers = entry.frozen.candidate.issues.filter(issue => issue.severity === 'error' && (issue.scope === 'all' || issue.scope === input.target) && !['RENDER_FAILED', 'BROWSER_MISSING', 'BROWSER_LAUNCH_FAILED'].includes(issue.code));
       if (blockers.length) throw new StudioError('HISTORICAL_INPUT_BLOCKED', '这个历史版本存在内容或排版问题。请修改项目后生成新版本，历史内容不会被改写。', 409);
       let html: string;
       try { html = await readFile(resourcePath(source.relativePath), 'utf8'); if (digest(html) !== source.hash) throw new Error('checksum'); }
@@ -229,7 +237,7 @@ export async function registerExportRoutes(app: FastifyInstance, store: StudioSt
         const started = await startRenderer(); browser = started.browser; activeBrowsers.add(browser);
         if (entry.frozen.dependencies.engine && (entry.frozen.dependencies.engine.chromium !== started.dependencies.chromium || entry.frozen.dependencies.engine.renderer !== started.dependencies.renderer)) throw new StudioError('HISTORICAL_ENGINE_CHANGED', '渲染器版本已变化，请从当前项目创建新版本；原有成功产物仍保留。', 409);
         result.status = 'running'; entry.record.status = 'running'; store.putRecord('export', entry.record.id, entry);
-        const files = await renderTarget(browser, html, input.target, entry.frozen.snapshot.document.output, resourcePath(`${entry.record.projectId}/${entry.record.candidateId}/retry-${randomUUID()}/${input.target}`));
+        const files = await renderOutput(browser, html, input.target, entry.frozen.snapshot.document.output, resourcePath(`${entry.record.projectId}/${entry.record.candidateId}/retry-${randomUUID()}/${input.target}`));
         result.artifacts = registerArtifacts(files, input.target, entry.frozen); result.status = 'success'; delete result.error;
       } catch (error) {
         if (error instanceof StudioError) throw error;
@@ -254,7 +262,9 @@ export async function registerExportRoutes(app: FastifyInstance, store: StudioSt
     const stored = ownedCandidate(request.params.id, request.params.candidateId);
     const result = stored.candidate.results.find(value => value.target === 'image');
     if (!result || result.status !== 'ready') throw new StudioError('PREVIEW_NOT_READY', '长图正式预览尚未就绪。', 409);
-    const html = `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src 'self'; style-src 'unsafe-inline'"><title>长图正式预览</title><style>html{background:#e7e6e2}body{margin:0;padding:12px;font:12px sans-serif;color:#595952}figure{margin:0 auto 20px;max-width:600px}img{display:block;width:100%;height:auto}figcaption{padding:10px 0;text-align:center}</style><body>${result.artifacts.map((artifact, index) => `<figure><img src="${escapeHtml(artifact.url)}" alt="交付长图 ${index + 1}"><figcaption>${index + 1} / ${result.artifacts.length} · ${artifact.width} × ${artifact.height}</figcaption></figure>`).join('')}</body></html>`;
+    const segments = result.artifacts.filter(artifact => artifact.role !== 'share');
+    const share = result.artifacts.find(artifact => artifact.role === 'share');
+    const html = `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src 'self'; style-src 'unsafe-inline'"><title>长图正式预览</title><style>html{background:#e7e6e2}body{margin:0;padding:12px;font:12px sans-serif;color:#595952}figure{margin:0 auto 20px;max-width:600px}img{display:block;width:100%;height:auto}figcaption{padding:10px 0;text-align:center}h2{margin:28px auto 12px;max-width:600px;font-size:13px;font-weight:600;text-align:center}figure.share{max-width:360px}</style><body>${segments.map((artifact, index) => `<figure><img src="${escapeHtml(artifact.url)}" alt="交付长图 ${index + 1}"><figcaption>${index + 1} / ${segments.length} · ${artifact.width} × ${artifact.height}</figcaption></figure>`).join('')}${share ? `<h2>分享卡 · 1080 × 1920</h2><figure class="share"><img src="${escapeHtml(share.url)}" alt="分享卡"><figcaption>${share.width} × ${share.height}</figcaption></figure>` : ''}</body></html>`;
     return reply.header('Cache-Control', 'no-store').type('text/html; charset=utf-8').send(html);
   });
 }

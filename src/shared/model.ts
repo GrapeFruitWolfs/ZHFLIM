@@ -28,14 +28,25 @@ export interface DeliveryItem {
   visible: boolean; order: number;
 }
 interface BlockBase { id: string; title: string; visible: boolean; order: number }
-export interface CoverSettings { emphasis: 'names' | 'photo'; headline: string; message: string; image: AssetRef | null }
+/** Optional teaser (trailer) link shown right under the cover: a QR on long images, a link in PDFs. */
+export interface TeaserLink { url: string; label: string }
+export interface CoverSettings { emphasis: 'names' | 'photo'; headline: string; message: string; image: AssetRef | null; teaser?: TeaserLink }
+/** One frame of a highlight film strip. */
+export interface StillFrame { id: string; image: AssetRef | null; caption: string; order: number; visible: boolean }
+/** One moment of the wedding day timeline; `time` is free text such as "09:30" or "傍晚". */
+export interface TimelineEntry { id: string; time: string; title: string; note: string; image: AssetRef | null; order: number; visible: boolean }
 export interface ProductionDetails { content: string; image: AssetRef | null; caption: string; placement: 'inline' | 'appendix' | 'hidden' }
 export interface IntroBlock extends BlockBase { type: 'intro'; cover?: CoverSettings }
 export interface DeliveryBlock extends BlockBase { type: 'deliveries'; items: DeliveryItem[] }
 export interface TextBlock extends BlockBase { type: 'text'; content: string; sourceDefinitionId?: string; details?: ProductionDetails }
 export interface ComparisonBlock extends BlockBase { type: 'comparisons'; layout: ComparisonLayout | 'inherit'; comparisons: Comparison[] }
 export interface SignatureBlock extends BlockBase { type: 'signature' }
-export type DocumentBlock = IntroBlock | DeliveryBlock | TextBlock | ComparisonBlock | SignatureBlock;
+export interface StillsBlock extends BlockBase { type: 'stills'; frames: StillFrame[] }
+export interface TimelineBlock extends BlockBase { type: 'timeline'; entries: TimelineEntry[] }
+export type DocumentBlock = IntroBlock | DeliveryBlock | TextBlock | ComparisonBlock | SignatureBlock | StillsBlock | TimelineBlock;
+/** Highlight strips are designed for 3–9 visible frames. */
+export const STILLS_LIMITS = { min: 3, max: 9 } as const;
+export const TIMELINE_MAX_ENTRIES = 24;
 export interface OutputSettings {
   mode: OutputMode; imageWidth: number; segmentHeight: number;
   allowImageSegments: boolean; allowComparisonPageBreak: boolean;
@@ -84,9 +95,11 @@ export interface Issue {
   scope: 'all' | OutputTarget; message: string;
   blockId?: string; comparisonId?: string; assetId?: string;
 }
+/** `share` marks the 1080×1920 share card produced alongside long-image segments. */
+export type ArtifactRole = 'segment' | 'share';
 export interface Artifact {
   id: string; target: OutputTarget; filename: string; mime: string; byteSize: number;
-  hash: string; width?: number; height?: number; pages?: number; url: string;
+  hash: string; width?: number; height?: number; pages?: number; url: string; role?: ArtifactRole;
 }
 export interface TargetResult {
   target: OutputTarget; status: 'ready' | 'blocked' | 'running' | 'success' | 'failed';

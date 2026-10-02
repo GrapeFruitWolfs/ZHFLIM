@@ -22,7 +22,9 @@ export async function checkGlyphCoverage(display: DisplayDocument, rootDir: stri
   texts.push({ value: display.tagline });
   for (const block of display.blocks) {
     if (block.type !== 'intro') texts.push({ value: block.title, blockId: block.id });
-    if (block.type === 'intro') for (const value of [block.salutation, block.names, block.weddingDate, block.deliveryDate, block.projectNo, block.cover?.headline, block.cover?.message]) texts.push({ value, blockId: block.id });
+    if (block.type === 'intro') for (const value of [block.salutation, block.names, block.weddingDate, block.deliveryDate, block.projectNo, block.cover?.headline, block.cover?.message, block.cover?.teaser?.label]) texts.push({ value, blockId: block.id });
+    if (block.type === 'stills') for (const frame of block.frames) texts.push({ value: frame.caption, blockId: block.id });
+    if (block.type === 'timeline') for (const entry of block.entries) for (const value of [entry.time, entry.title, entry.note]) texts.push({ value, blockId: block.id });
     if (block.type === 'text') for (const value of [block.content, block.details?.content, block.details?.image ? block.details.caption : undefined]) texts.push({ value, blockId: block.id });
     if (block.type === 'signature') for (const value of [block.photographer, block.studio]) texts.push({ value, blockId: block.id });
     if (block.type === 'deliveries') for (const item of block.items) for (const value of [item.title, item.description, item.format, item.accessNote]) texts.push({ value, blockId: block.id });
