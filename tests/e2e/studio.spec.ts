@@ -83,7 +83,6 @@ test('browser workflow: directory recognition, manual control, persistence and r
 
     await page.getByRole('button', { name: '视觉与输出', exact: true }).click();
     await page.locator('.template-card[data-template="cinematic"]').click();
-    await page.getByRole('button', { name: /Stacked · 上下/ }).click();
     await saved(page);
     await expect(page.frameLocator('iframe[title="交付文档手机预览"]').locator('body')).toHaveAttribute('data-template', 'cinematic');
     await expect(page.locator('.phone-frame .preview-loading')).toHaveCount(0);

@@ -47,22 +47,23 @@ test('the closing picture is the calmest visible graded picture that is not the 
   assert.ok(/class="unit finale-unit" data-fit="true" data-keep-next="true"/.test(html), 'finale and signature stay on one PDF page');
 });
 
-test('the revealed pair is not listed again; a single pair shows in full without a reveal', () => {
+test('every honest pair is a half-and-half reveal; the convention is explained once; mismatched pairs fall back to side by side', () => {
   const pairs = [
     { id: 'one', before: image('B1'), after: image('A1'), description: 'REVEAL_WORDS' },
     { id: 'two', before: image('B2'), after: image('A2') },
-    { id: 'three', before: image('B3'), after: image('A3') },
+    { id: 'odd', before: image('B3', undefined, 900, 1350), after: image('A3') },
   ];
   for (const templateId of TEMPLATE_IDS) {
     const markup = markupOf(renderHtml({ ...display(pairs), templateId }, 'image', NO_FONTS));
-    assert.equal(count(markup, /class="unit reveal-unit"/g), 1, templateId);
-    assert.equal(count(markup, /data-comparison="one"/g), 0, `${templateId}: revealed pair listed again`);
-    assert.equal(count(markup, /class="unit comparison-unit"/g), 2, templateId);
-    assert.ok(markup.indexOf('REVEAL_WORDS') > markup.indexOf('reveal-unit') && markup.indexOf('REVEAL_WORDS') < markup.indexOf('data-comparison="two"'));
-    assert.ok(!markup.includes('comparison-label') && !markup.includes('原始画面</span>'), 'Before/After is a corner tag, not a repeated caption row');
+    assert.equal(count(markup, /class="unit reveal-unit"/g), 2, templateId);
+    assert.equal(count(markup, /class="reveal-hint"/g), 1, `${templateId}: the hint appears once`);
+    assert.equal(count(markup, /class="unit comparison-unit"/g), 1, `${templateId}: only the mismatched pair is side by side`);
+    assert.ok(markup.includes('data-comparison="odd"') && !markup.includes('data-comparison="one"') && markup.includes('data-reveal="one"'));
+    assert.ok(markup.indexOf('REVEAL_WORDS') > markup.indexOf('data-reveal="one"') && markup.indexOf('REVEAL_WORDS') < markup.indexOf('data-reveal="two"'));
+    assert.ok(!markup.includes('comparison-label') && !markup.includes('原始画面</span><span'), 'Before/After is a corner tag, not a repeated caption row');
   }
   const single = markupOf(renderHtml(display([pairs[0]]), 'image', NO_FONTS));
-  assert.ok(!single.includes('reveal-unit') && single.includes('data-comparison="one"'));
+  assert.ok(single.includes('data-reveal="one"') && !single.includes('comparison-unit'), 'a single pair is a reveal too');
 });
 
 test('new projects open comparisons side by side', () => {
@@ -99,4 +100,31 @@ test('the closing line stays with the signature so it never lands alone on a las
   const html = renderHtml({ ...display([{ id: 'a', before: image('B1'), after: image('A1', 0.2) }]), tagline: 'CLOSING_LINE' }, 'pdf', NO_FONTS);
   assert.ok(html.includes('class="unit signature" data-block="sig" data-after-finale="true" data-keep-next="true"'));
   assert.ok(html.indexOf('class="unit signature"') < html.indexOf('CLOSING_LINE'));
+});
+
+test('documents saved with the old stacked layout use the same reveal presentation', async () => {
+  const { createProject } = await import('../src/shared/defaults.js');
+  const { prepareDisplay } = await import('../src/rendering/display.js');
+  const settings = { tenantId: 't', studioName: 'S', photographerName: '', tagline: '', accent: '#a78964', timezone: 'UTC' };
+  const project = createProject({ title: '旧布局', settings, presetId: 'signature' });
+  project.document.comparisonLayout = 'stacked';
+  for (const block of project.document.blocks) if (block.type === 'comparisons') block.layout = 'stacked';
+  const store = { getSettings: () => settings, assetPath: () => { throw new Error('no assets'); } } as never;
+  const prepared = await prepareDisplay(project, store, '2026-09-26');
+  const pairs = prepared.display.blocks.find(block => block.type === 'comparisons');
+  assert.equal(pairs?.type === 'comparisons' && pairs.layout, 'split');
+  const html = renderHtml({ ...display([{ id: 'a', before: image('B'), after: image('A') }]), blocks: display([{ id: 'a', before: image('B'), after: image('A') }]).blocks.map(block => block.type === 'comparisons' ? { ...block, layout: 'stacked' as const } : block) } as DisplayDocument, 'image', NO_FONTS);
+  assert.ok(html.includes('data-reveal="a"') && !html.includes('comparison-pair stacked'));
+});
+
+test('the closing picture is a slim themed banner below which quiet words sit', () => {
+  for (const templateId of TEMPLATE_IDS) {
+    const html = renderHtml({ ...display([{ id: 'a', before: image('B1'), after: image('A1', 0.2) }, { id: 'b', before: image('B2'), after: image('A2', 0.4) }]), templateId }, 'image', NO_FONTS);
+    const finale = html.slice(html.indexOf('class="unit finale-unit"'), html.indexOf('class="unit signature"'));
+    assert.ok(finale.includes('<figure class="finale-banner"><div class="finale-frame"><img src="data:image/jpeg;base64,A1"') && finale.includes('class="finale-veil"'), templateId);
+    assert.ok(finale.indexOf('finale-banner') < finale.indexOf('finale-copy'), `${templateId}: words follow the banner`);
+    assert.ok(!finale.includes('cv-backdrop') && !finale.includes('story-photo'), templateId);
+  }
+  const html = renderHtml(display([{ id: 'a', before: image('B1'), after: image('A1', 0.2) }]), 'image', NO_FONTS);
+  assert.ok(/\.finale-frame\{[^}]*aspect-ratio:\d+(\.\d+)?\/1/.test(html), 'a slim banner, not a full screen');
 });

@@ -255,7 +255,7 @@ test('all five visual templates preserve selected layout and produce PDF plus lo
     assert.ok(prepared.issues.some(issue => issue.code === 'ASPECT_RATIO_MISMATCH'));
     assert.deepEqual(await checkGlyphCoverage(prepared.display, process.cwd()), []);
     const html = renderHtml(prepared.display, 'pdf', fonts);
-    assert.ok(html.includes('comparison-pair split'), `${templateId} must respect the project layout`);
+    assert.ok(html.includes('comparison-pair split'), `${templateId} renders every pair side by side`);
     if (templateId in structuralMarkers) assert.ok(html.includes(structuralMarkers[templateId as keyof typeof structuralMarkers]));
     const pdf = await renderTarget(browser, html, 'pdf', store.current.document.output, path.join(directory, templateId, 'pdf'));
     assert.ok(pdf[0].pages! >= 2, templateId);
@@ -308,7 +308,8 @@ test('Chromium produces real PDF and bounded long-image segments without truncat
 test('candidate API allows a successful image beside blocked PDF, rejects stale commits and keeps historical artifacts', { timeout: 120_000 }, async t => {
   if (!process.env.WDS_CHROMIUM_PATH && existsSync('/usr/bin/chromium')) process.env.WDS_CHROMIUM_PATH = '/usr/bin/chromium';
   const directory = await mkdtemp(path.join(os.tmpdir(), 'wds-render-api-')); t.after(() => rm(directory, { recursive: true, force: true }));
-  const store = new MemoryStore(directory, sample()); await addPortraits(store, directory);
+  const store = new MemoryStore(directory, sample()); // A mismatched 1:8 pair cannot be revealed; side by side it is still taller than one PDF page.
+  await addPortraits(store, directory, [[300, 2400], [310, 2400]]);
   const app = Fastify({ logger: false }); t.after(() => app.close());
   app.setErrorHandler((error, _request, reply) => reply.code(error instanceof StudioError ? error.statusCode : 500).send({ code: error instanceof StudioError ? error.code : 'UNKNOWN', message: error instanceof Error ? error.message : 'error' }));
   await registerExportRoutes(app, store, { dataDir: directory, rootDir: process.cwd(), host: '127.0.0.1', port: 4318, testing: true });
@@ -406,12 +407,12 @@ test('comparison pairs share one crop so Before and After framing stays identica
 });
 
 test('templates keep their own palette; studio colour only marks the brand when it stays legible', () => {
-  assert.equal(brandColor(templates.gallery, '#57654f'), templates.gallery.accent);
-  assert.equal(brandColor(templates.cinematic, '#57654f'), templates.cinematic.accent);
+  assert.equal(brandColor(templates.gallery, '#2f3a33'), templates.gallery.accent);
+  assert.equal(brandColor(templates.cinematic, '#2f3a33'), templates.cinematic.accent);
   assert.equal(brandColor(templates.editorial, '#57654f'), '#57654f');
   assert.equal(brandColor(templates.editorial, 'not-a-colour'), templates.editorial.accent);
   for (const template of Object.values(templates)) assert.ok(contrastRatio(template.accent, template.background) >= 3, `${template.id} accent must be legible`);
-  const display = { templateId: 'gallery' as const, accent: '#57654f', tagline: '', blocks: [], output: sample().document.output };
+  const display = { templateId: 'gallery' as const, accent: '#2f3a33', tagline: '', blocks: [], output: sample().document.output };
   const html = renderHtml(display, 'image', { css: '', hashes: {}, issues: [] });
   assert.ok(html.includes(`--accent:${templates.gallery.accent}`) && html.includes(`--brand:${templates.gallery.accent}`));
 });
@@ -447,9 +448,11 @@ test('rhythm components reuse visible images only: reveal needs identical framin
     ],
   };
   const html = renderHtml(display, 'image', { css: '', hashes: {}, issues: [] });
-  const revealHtml = html.slice(html.indexOf('class="unit reveal-unit"'), html.indexOf('class="unit comparison-unit"'));
+  // Identical framing → reveal; the mismatched first pair stays two pictures side by side.
+  const revealHtml = html.slice(html.indexOf('data-reveal="same"') - 60, html.indexOf('data-reveal="last"'));
   assert.ok(revealHtml.includes('base64,A2') && revealHtml.includes('base64,B2') && revealHtml.includes('SAME'));
   assert.ok(!revealHtml.includes('base64,B1'));
+  assert.ok(html.includes('data-comparison="mixed"') && !html.includes('data-comparison="same"'));
   const markup = html.slice(html.indexOf('<body'));
   assert.equal(markup.match(/ticket-start/g)?.length, 2);
   assert.equal(markup.match(/ticket-end/g)?.length, 2);

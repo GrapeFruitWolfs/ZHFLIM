@@ -8,7 +8,7 @@ import type { StudioStore } from '../server/contracts.js';
 import { TEMPLATE_IDS } from '../shared/templates.js';
 import { normalizeChapters } from '../shared/chapters.js';
 
-export const RENDERER_VERSION = 'studio-renderer-7';
+export const RENDERER_VERSION = 'studio-renderer-8';
 export const RENDER_BUDGET = { comparisons: 100, decodedPixels: 120_000_000, sourceBytes: 512 * 1024 * 1024, managedBytes: 256 * 1024 * 1024, visibleCharacters: 200_000, htmlBytes: 96 * 1024 * 1024 };
 export const digest = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
 export const escapeHtml = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]!);
@@ -328,7 +328,8 @@ export async function prepareDisplay(project: ProjectRecord, store: StudioStore,
         comparisons.push({ id: comparison.id, title: comparison.title, description: comparison.description, number: String(index + 1).padStart(2, '0'), before, after });
       }
       if (!comparisons.length) issues.push(makeIssue('COMPARISONS_EMPTY', `“${block.title || '调色对比'}”尚无可见对比组，请导入图片、添加对比或隐藏该章节。`, 'error', 'all', { blockId: block.id }));
-      display.blocks.push({ type: 'comparisons', id: block.id, title: block.title, layout, comparisons });
+      // One presentation for every project: an opening reveal, then side-by-side pairs. The stored layout is kept for compatibility only.
+      display.blocks.push({ type: 'comparisons', id: block.id, title: block.title, layout: 'split', comparisons });
     }
   }
   if (!display.blocks.length) issues.push(makeIssue('DOCUMENT_EMPTY', '没有可见的交付章节，请至少显示一个模块。'));

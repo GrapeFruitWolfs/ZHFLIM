@@ -2,9 +2,11 @@ import type { OutputTarget, TemplateId } from '../shared/model.js';
 import { escapeHtml as e, type DisplayBlock, type DisplayDocument, type DisplayImage, type FontBundle } from './display.js';
 import { brandColor, sharedCss, templates } from './templates.js';
 import { coverBaseCss, coverCss, displayFontCss, renderCover } from './covers.js';
-import { componentCss, componentTemplateCss, finale, finaleImage, formatChips, reveal, revealCandidate } from './components.js';
+import { componentCss, componentTemplateCss, finale, finaleImage, formatChips, reveal, revealable } from './components.js';
 import { momentsCss, momentsTemplateCss, shareCard, stillsUnits, teaserUnit, timelineUnits } from './moments.js';
 import { storyCss } from './editorial.js';
+import { typeScaleCss, typeScaleTemplateCss } from './typescale.js';
+import { themeCss } from './themes/index.js';
 import { textChunks } from './text.js';
 
 export { textChunks };
@@ -139,18 +141,20 @@ export function renderHtml(display: DisplayDocument, target: OutputTarget, fonts
       });
     } else if (block.type === 'comparisons') {
       body.push(chapter(block, ++chapterIndex, template.id));
-      // With a single pair the full Before/After is the story; the half-and-half reveal only opens longer chapters.
-      const highlight = block.comparisons.length > 1 ? revealCandidate(block.comparisons) : undefined;
-      if (highlight) {
-        body.push(unit(reveal(highlight), 'reveal-unit', `data-block="${e(block.id)}" data-fit="true"`));
-        // The revealed pair is not listed again; only its words follow the picture.
-        for (const chunk of textChunks(highlight.description ?? '', 180)) body.push(unit(`<p class="comparison-description">${e(chunk)}</p>`, 'reveal-description', `data-block="${e(block.id)}"`));
-      }
+      // Every pair is a half-and-half reveal; only a pair whose two pictures differ in size (which
+      // cannot be cut honestly) falls back to two pictures side by side.
+      const label = template.id === 'archive' ? 'FIG.' : template.id === 'gallery' ? 'STUDY' : template.id === 'correspondence' ? 'Plate' : 'No.';
+      let hint = true;
       for (const comparison of block.comparisons) {
-        if (comparison === highlight) continue;
-        const label = template.id === 'archive' ? 'FIG.' : template.id === 'gallery' ? 'STUDY' : template.id === 'correspondence' ? 'Plate' : 'No.';
-        const heading = `<div class="comparison-heading"><span>${e(comparison.title || '调色对比')}</span><span class="comparison-number">${label} ${comparison.number}</span></div>`;
-        body.push(unit(`${heading}<div class="comparison-pair ${block.layout}">${figure(comparison.before, 'before')}${figure(comparison.after, 'after')}</div>`, 'comparison-unit', `data-comparison="${e(comparison.id)}" data-block="${e(block.id)}"`));
+        const number = `${label} ${comparison.number}`;
+        if (revealable(comparison)) {
+          body.push(unit(reveal(comparison, { number, hint }), 'reveal-unit', `data-block="${e(block.id)}" data-reveal="${e(comparison.id)}" data-fit="true"${comparison.description?.trim() ? ' data-keep-next="true"' : ''}`));
+          hint = false;
+          for (const chunk of textChunks(comparison.description ?? '', 180)) body.push(unit(`<p class="comparison-description">${e(chunk)}</p>`, 'reveal-description', `data-block="${e(block.id)}"`));
+          continue;
+        }
+        const heading = `<div class="comparison-heading"><span>${e(comparison.title || '调色对比')}</span><span class="comparison-number">${number}</span></div>`;
+        body.push(unit(`${heading}<div class="comparison-pair split">${figure(comparison.before, 'before')}${figure(comparison.after, 'after')}</div>`, 'comparison-unit', `data-comparison="${e(comparison.id)}" data-block="${e(block.id)}"`));
         for (const chunk of textChunks(comparison.description ?? '', 180)) body.push(unit(`<p class="comparison-description">${e(chunk)}</p>`, '', `data-block="${e(block.id)}"`));
       }
     } else if (block.type === 'signature') {
@@ -169,5 +173,5 @@ export function renderHtml(display: DisplayDocument, target: OutputTarget, fonts
   const appendixUnits = appendix.flatMap(block => renderDetails(block, true));
   const appendixHeading = `<h2 class="chapter-heading appendix-title">制作附录</h2><div class="chapter-caption">Behind the film</div><p class="appendix-caption">这份影像背后的技术细节与制作记录。</p>`;
   const appendixHtml = appendixUnits.length ? unit(chapterBody(template.id, indexLabel(template.id, '', true), appendixHeading), 'chapter appendix-start', 'data-keep-next="true"') + appendixUnits.join('\n') : '';
-  return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=432"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; font-src data: 'self'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"><title>${e(safeTitle)}</title><style>${fonts.css}\n:root{--background:${template.background};--foreground:${template.foreground};--muted:${template.muted};--line:${template.line};--panel:${template.panel};--accent:${template.accent};--brand:${brandColor(template, display.accent)}}${displayFontCss}${sharedCss}\n${template.css}\n${storyCss}\n${coverBaseCss}\n${coverCss[template.id]}\n${componentCss}\n${componentTemplateCss[template.id]}\n${momentsCss}\n${momentsTemplateCss[template.id]}</style></head><body data-template="${template.id}" data-target="${target}"><main class="render-root"><div class="flow"><header class="masthead">${masthead}</header><div class="units">${body.join('\n')}${appendixHtml}${finaleHtml}${signatures.join('\n')}${closing}</div></div></main>${target === 'image' ? shareCard(display, template, brand) : ''}</body></html>`;
+  return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=432"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; font-src data: 'self'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"><title>${e(safeTitle)}</title><style>${fonts.css}\n:root{--background:${template.background};--foreground:${template.foreground};--muted:${template.muted};--line:${template.line};--panel:${template.panel};--accent:${template.accent};--brand:${brandColor(template, display.accent)}}${displayFontCss}${sharedCss}\n${template.css}\n${storyCss}\n${coverBaseCss}\n${coverCss[template.id]}\n${componentCss}\n${componentTemplateCss[template.id]}\n${momentsCss}\n${momentsTemplateCss[template.id]}\n${typeScaleCss}\n${typeScaleTemplateCss[template.id]}\n${themeCss[template.id]}</style></head><body data-template="${template.id}" data-target="${target}"><main class="render-root"><div class="flow"><header class="masthead">${masthead}</header><div class="units">${body.join('\n')}${appendixHtml}${finaleHtml}${signatures.join('\n')}${closing}</div></div></main>${target === 'image' ? shareCard(display, template, brand) : ''}</body></html>`;
 }

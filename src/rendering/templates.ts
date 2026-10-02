@@ -8,28 +8,28 @@ export interface TemplateDefinition {
 
 export const templates: Record<TemplateId, TemplateDefinition> = {
   editorial: {
-    id: 'editorial', version: 1, name: '私人影像展册 · Editorial', background: '#fafaf9', foreground: '#222421', muted: '#62685f',
-    line: '#d8dcd5', panel: '#eff1eb', accent: '#57654f', heroLabel: 'THE WEDDING COLLECTION', heroTitle: '属于你们的婚礼影像。',
+    id: 'editorial', version: 1, name: '私人影像展册 · Editorial', background: '#f5f0e6', foreground: '#2b2723', muted: '#6b6157',
+    line: '#ddd3c3', panel: '#ebe4d7', accent: '#86683f', heroLabel: 'THE WEDDING COLLECTION', heroTitle: '属于你们的婚礼影像。',
     css: editorialCss,
   },
   cinematic: {
-    id: 'cinematic', version: 1, name: '夜幕 · Cinematic', background: '#151715', foreground: '#eeeee6', muted: '#a1a399',
-    line: '#3c4038', panel: '#22261f', accent: '#b7b88c', heroLabel: 'A STORY IN MOTION', heroTitle: 'Every frame,\nforever.',
+    id: 'cinematic', version: 1, name: '夜幕 · Cinematic', background: '#13110f', foreground: '#e6dfd3', muted: '#9b9287',
+    line: '#2f2a24', panel: '#1b1815', accent: '#b99a6b', heroLabel: 'A STORY IN MOTION', heroTitle: 'Every frame,\nforever.',
     css: `.chapter-heading{font-weight:350}.comparison-frame{background:#080b09}.signature-mark{font-style:italic}.delivery-heading{border-bottom:1px solid var(--line);padding-bottom:16px}`,
   },
   archive: {
-    id: 'archive', version: 1, name: '制作档案 · Archive', background: '#ebe9df', foreground: '#26362f', muted: '#687269',
-    line: '#b6beb2', panel: '#e1e3d8', accent: '#6f7954', heroLabel: 'PRIVATE PRODUCTION ARCHIVE', heroTitle: 'The wedding\narchive.',
+    id: 'archive', version: 1, name: '制作档案 · Archive', background: '#ecebe5', foreground: '#1d2924', muted: '#5a625c',
+    line: '#c8cac1', panel: '#e2e2db', accent: '#4f6b5c', heroLabel: 'PRIVATE PRODUCTION ARCHIVE', heroTitle: 'The wedding\narchive.',
     css: `.edition{font-family:'Studio Sans',sans-serif;font-style:normal;font-size:8px;letter-spacing:.1em}.masthead{border-bottom:2px solid var(--foreground)}.chapter{border-top:2px solid var(--foreground);display:grid;grid-template-columns:67px minmax(0,1fr);gap:14px;padding-top:17px}.chapter-index{font-family:'Studio Sans',sans-serif;font-style:normal;letter-spacing:.08em;font-size:9px;line-height:1.8}.chapter-heading{font-size:21px;margin:0 0 7px;letter-spacing:0}.chapter-caption{font-size:8px;letter-spacing:.1em}.delivery-heading{border-bottom:1px solid var(--line);padding:9px 0 15px;gap:17px}.item-number{font-family:'Studio Sans',sans-serif;font-size:9px;letter-spacing:.09em;line-height:1.8;min-width:62px;padding-top:6px}.item-format{font-variant-numeric:tabular-nums}.comparison-heading{padding:9px 0;border-top:1px solid var(--foreground);border-bottom:1px solid var(--line)}.comparison-number{font-family:'Studio Sans',sans-serif;font-size:10px;font-style:normal;letter-spacing:.06em}.comparison-label{font-size:12px;letter-spacing:.04em}.signature{border-top:2px solid var(--foreground)}.signature-mark{font-family:'Studio Sans',sans-serif;font-size:26px;letter-spacing:-.03em}.archive-credit{display:grid;grid-template-columns:95px minmax(0,1fr);gap:14px;margin-top:24px}.archive-credit-label{font-size:9px;color:var(--muted);letter-spacing:.08em}.closing{text-align:left;letter-spacing:.07em}`,
   },
   correspondence: {
-    id: 'correspondence', version: 1, name: '写给你们 · Correspondence', background: '#f6f0e9', foreground: '#49352f', muted: '#786258',
-    line: '#dacbc1', panel: '#eee3da', accent: '#a16858', heroLabel: 'A LETTER FOR TWO', heroTitle: 'For you,\nfor always.',
+    id: 'correspondence', version: 1, name: '写给你们 · Correspondence', background: '#f6efe8', foreground: '#4a2e33', muted: '#7b625f',
+    line: '#e4d5cb', panel: '#efe5dc', accent: '#a3655c', heroLabel: 'A LETTER FOR TWO', heroTitle: 'For you,\nfor always.',
     css: `.masthead{border-bottom:0;margin-bottom:12px}.edition{font-size:11px}.chapter{border-top:0;padding-top:10px;margin-top:28px}.chapter-index{font-size:13px;font-style:italic;color:var(--muted);display:block}.chapter-heading{font-family:'Studio Serif','Studio Sans',serif;font-size:24px;font-weight:400;letter-spacing:.015em;margin:8px 0 9px}.chapter-caption{letter-spacing:.12em;font-size:8px}.body-copy{line-height:1.85}.delivery-heading{display:block;border-top:1px solid var(--line);padding-top:14px}.item-number{display:block;font-size:12px;font-style:italic;line-height:1.6;margin-bottom:8px}.item-title{font-size:18px;font-weight:450}.delivery-access{background:transparent;border:1px solid var(--line)}.comparison-heading{font-family:'Studio Serif','Studio Sans',serif;font-size:14px}.comparison-number{font-size:13px}.comparison-frame{padding:7px;background:#fffbf5;border:1px solid var(--line)}.comparison-label{font-size:12px;letter-spacing:.04em}.signature{border-top:0;padding-top:18px}.signature-caption{letter-spacing:.09em}.signature-mark{font-style:italic;font-size:44px;font-weight:380;margin:16px 0 24px}.signature-name{font-size:18px}.signature-studio{margin-top:8px}.letter-signoff{width:45px;height:1px;background:var(--accent);margin:24px 0 0}.closing{border-top:0;font-size:10px;letter-spacing:.06em;text-align:left;padding-top:5px}`,
   },
   gallery: {
-    id: 'gallery', version: 1, name: '私人展映 · Gallery', background: '#18212a', foreground: '#f2eee6', muted: '#a1acb4',
-    line: '#41505d', panel: '#222f3a', accent: '#cc9c6d', heroLabel: 'A PRIVATE VIEWING', heroTitle: 'The moments\nremain.',
+    id: 'gallery', version: 1, name: '私人展映 · Gallery', background: '#12171d', foreground: '#ebe7df', muted: '#99a2aa',
+    line: '#28313a', panel: '#171d24', accent: '#cdb88e', heroLabel: 'A PRIVATE VIEWING', heroTitle: 'The moments\nremain.',
     css: `.masthead{border-bottom:0;margin-bottom:18px}.edition{font-family:'Studio Sans',sans-serif;font-style:normal;font-size:8px;letter-spacing:.14em}.gallery-poster-art{height:100%;display:grid;grid-template-columns:1fr 1.4fr 1fr;gap:8px;align-items:center;padding:16px}.gallery-poster-art i{height:68%;border:1px solid #7e8d98;transform:skewY(-8deg)}.gallery-poster-art i:nth-child(2){height:100%;border-color:var(--accent);transform:skewY(8deg)}.chapter{border-top:1px solid var(--line);padding-top:20px;margin-top:30px}.chapter-index{font-family:'Studio Sans',sans-serif;font-style:normal;font-size:8px;letter-spacing:.2em}.chapter-heading{font-size:25px;line-height:1.4;font-weight:350;letter-spacing:-.015em;margin:12px 0 10px}.chapter-caption{font-size:8px;letter-spacing:.15em}.gallery-chapter-line{display:block;width:34px;height:2px;background:var(--accent);margin-top:17px}.delivery-heading{gap:17px;padding-top:9px}.item-number{font-size:32px;line-height:1.2}.item-title{font-weight:400;font-size:18px}.item-format{letter-spacing:.06em}.delivery-access{border:1px solid var(--line);background:transparent}.comparison-heading{font-size:12px;align-items:baseline;margin-bottom:10px}.comparison-number{font-size:11px;font-family:'Studio Sans',sans-serif;font-style:normal;letter-spacing:.14em}.comparison-frame{background:#0d141c;padding:8px;border:1px solid var(--line)}.comparison-label{font-size:12px;letter-spacing:.06em;padding-top:12px}.signature{border-top:1px solid var(--line);padding-top:25px}.signature-mark{font-size:42px;letter-spacing:-.04em;line-height:1.08}.gallery-credit{display:flex;justify-content:space-between;gap:18px;align-items:baseline;margin-top:25px}.signature-name{font-size:15px}.signature-studio{font-size:12px;text-align:right}.closing{font-size:8px;letter-spacing:.11em}`,
   },
 };

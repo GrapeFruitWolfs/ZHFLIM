@@ -2103,11 +2103,6 @@ function Workbench({
               <span>
                 {getTemplate(project.document.templateId).label} · {getTemplate(project.document.templateId).name}
               </span>
-              <span>
-                {project.document.comparisonLayout === "stacked"
-                  ? "上下对比"
-                  : "左右对比"}
-              </span>
             </div>
           </aside>
         )}
@@ -2681,21 +2676,6 @@ function BlockEditor({
             </p>
           </div>
         </div>
-        <Field label="本章节布局">
-          <select
-            value={block.layout}
-            onChange={(event) =>
-              update({
-                ...block,
-                layout: event.target.value as ComparisonBlock["layout"],
-              })
-            }
-          >
-            <option value="inherit">跟随文档设置</option>
-            <option value="stacked">Stacked · 上下展示</option>
-            <option value="split">Split · 左右展示</option>
-          </select>
-        </Field>
         <button className="button button-outline" onClick={onAssets}>
           <ImageIcon size={16} />
           整理对比图片
@@ -2972,51 +2952,7 @@ function VisualEditor({
         ))}
       </div>
       <h3 className="option-heading">
-        <span>02</span>对比图片布局
-      </h3>
-      <div className="layout-options">
-        <button
-          className={doc.comparisonLayout === "stacked" ? "selected" : ""}
-          onClick={() =>
-            edit((draft) => {
-              draft.document.comparisonLayout = "stacked";
-            })
-          }
-        >
-          <span className="layout-glyph stacked">
-            <i />
-            <i />
-          </span>
-          <span>
-            <strong>Stacked · 上下</strong>
-            <small>适合手机查看细节</small>
-          </span>
-          {doc.comparisonLayout === "stacked" && <Check size={16} />}
-        </button>
-        <button
-          className={doc.comparisonLayout === "split" ? "selected" : ""}
-          onClick={() =>
-            edit((draft) => {
-              draft.document.comparisonLayout = "split";
-            })
-          }
-        >
-          <span className="layout-glyph split">
-            <i />
-            <i />
-          </span>
-          <span>
-            <strong>Split · 左右</strong>
-            <small>同屏比较两种画面</small>
-          </span>
-          {doc.comparisonLayout === "split" && <Check size={16} />}
-        </button>
-      </div>
-      <p className="field-hint">
-        已单独设置布局的章节保留自己的选择。图片完整显示，不自动裁切。
-      </p>
-      <h3 className="option-heading">
-        <span>03</span>本次输出
+        <span>02</span>本次输出
       </h3>
       <div className="output-options">
         {(["pdf", "both", "image"] as const).map((mode) => (
